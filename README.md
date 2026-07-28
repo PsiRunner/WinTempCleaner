@@ -58,7 +58,7 @@ No installation, no dependencies, no background services. One `.exe`, double-cli
 
 | Option | Scope |
 |---|---|
-| **1 · Quick Clean** | `%TEMP%`, `C:\Windows\Temp`, Prefetch, Chrome/Edge/Firefox caches, Recycle Bin |
+| **1 · Quick Clean** | `%TEMP%`, `C:\Windows\Temp`, Prefetch, browser caches (Chrome, Edge, Brave, Opera, Vivaldi, Chromium, Firefox), Recycle Bin |
 | **2 · Deep Clean** | Everything in Quick + Shaders + System Files |
 | **3 · Shaders & Tiles** | DirectX Shader Cache, NVIDIA DX/GL Cache, Windows Thumbnail Cache |
 | **4 · Windows Files** | Windows Update cache, Panther/CBS logs, minidumps, WER reports, CrashDumps, MEMORY.DMP, Windows.old (prompts) |
