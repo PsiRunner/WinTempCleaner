@@ -413,7 +413,7 @@ class App(ctk.CTk):
         self._start.configure(text="Run Analysis" if key == "analyze" else f"Start {name}")
 
     def _ask(self, title, msg, ok="Continue", danger=False):
-        dlg = ctk.CTkToplevel(self, fg_color=SURFACE, corner_radius=14)
+        dlg = ctk.CTkToplevel(self, fg_color=SURFACE)
         dlg.title(title)
         w, h = 440, 230
         dlg.resizable(False, False)
@@ -620,7 +620,7 @@ class App(ctk.CTk):
                 pass
 
     def _show_update_dialog(self, rel, asset):
-        dlg = ctk.CTkToplevel(self, fg_color=SURFACE, corner_radius=14)
+        dlg = ctk.CTkToplevel(self, fg_color=SURFACE)
         dlg.title("Update available")
         w, h = 480, 410
         dlg.resizable(False, False)

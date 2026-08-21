@@ -39,7 +39,7 @@ from rich.table import Table
 from rich import box
 from rich.prompt import Prompt, Confirm
 
-APP_VERSION = "3.0"
+APP_VERSION = "3.1"
 
 console = Console()
 ERROR_LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cleaner_error.log")
