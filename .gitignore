@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+build/
+dist/
+Reports/
+cleaner_config.ini
+cleaner_error.log

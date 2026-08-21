@@ -8,7 +8,7 @@
 </p>
 
 <h1 align="center">🧹 WinTempCleaner</h1>
-<p align="center"><em>Portable Windows Temp &amp; Cache Cleaner — CLI (Enhanced Edition v3.0)</em></p>
+<p align="center"><em>Portable Windows Temp &amp; Cache Cleaner — CLI + GUI (Enhanced Edition v3.0)</em></p>
 
 ---
 
@@ -39,6 +39,7 @@ No installation, no dependencies, no background services. One `.exe`, double-cli
 | **Auto-elevation** | Prompts for administrator rights on launch (UAC) |
 | **Locked-file safe** | Skipped files are reported — no Explorer popups, no crashes |
 | **Persistent options** | Age limit / Recycle Bin / reports stored in `cleaner_config.ini` |
+| **Minimalistic GUI** | Dark CustomTkinter front-end — live log, stat cards, analysis bars, report viewer |
 
 ---
 
@@ -99,6 +100,15 @@ Two more safety layers apply to everything:
 2. Double-click — accept the UAC prompt when it appears.
 3. Choose an option from the menu and press Enter.
 
+### GUI
+
+```batch
+pip install customtkinter
+python temp_cleaner_gui.py
+```
+
+Same engine, same safety layers — dark sidebar, live log, stat cards and analysis bars.
+
 ### From source
 
 ```batch
@@ -156,6 +166,15 @@ pip install pyinstaller rich
 pyinstaller --onefile --console --uac-admin `
     --name "WindowsTempCleaner" `
     temp_cleaner.py
+```
+
+GUI build:
+
+```batch
+pip install pyinstaller customtkinter rich
+pyinstaller --onefile --noconsole --uac-admin --collect-all customtkinter `
+    --name "WindowsTempCleanerGUI" `
+    temp_cleaner_gui.py
 ```
 
 The `.exe` will be placed in the `dist/` folder.
