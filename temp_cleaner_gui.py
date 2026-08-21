@@ -7,6 +7,7 @@ Reuses all cleaning logic, reports and settings from the CLI module.
 
 import io
 import os
+import re
 import sys
 import glob
 import json
@@ -14,6 +15,9 @@ import time
 import ctypes
 import threading
 import collections
+import subprocess
+import urllib.error
+import urllib.request
 
 import customtkinter as ctk
 from rich.console import Console
@@ -52,6 +56,86 @@ TAG_COLOR = {"safe": GREEN, "caution": AMBER, "info": MUTED}
 TAG_TEXT  = {"safe": "SAFE", "caution": "CAUTION", "info": "SCAN"}
 
 AGES = {"Off": 0, "1 day": 1, "3 days": 3, "7 days": 7, "30 days": 30}
+
+REPO_PAGE = "https://github.com/PsiRunner/WinTempCleaner"
+RELEASES_API = "https://api.github.com/repos/PsiRunner/WinTempCleaner/releases/latest"
+API_TIMEOUT = 20
+DOWNLOAD_TIMEOUT = 300
+DOWNLOAD_RETRIES = 3
+
+
+def _version_tuple(s):
+    nums = [int(n) for n in re.findall(r"\d+", s or "")][:5]
+    return tuple(nums) if nums else (0,)
+
+
+def is_newer_version(remote_tag, local_version=VERSION):
+    a, b = _version_tuple(remote_tag), _version_tuple(local_version)
+    n = max(len(a), len(b))
+    return a + (0,) * (n - len(a)) > b + (0,) * (n - len(b))
+
+
+def _gh_headers():
+    return {"User-Agent": f"{APP_NAME}/{VERSION}", "Accept": "application/vnd.github+json"}
+
+
+def fetch_latest_release(timeout=API_TIMEOUT):
+    req = urllib.request.Request(RELEASES_API, headers=_gh_headers())
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    return {
+        "tag": data.get("tag_name") or "",
+        "title": data.get("name") or "",
+        "notes": data.get("body") or "",
+        "page": data.get("html_url") or REPO_PAGE,
+        "assets": [
+            {"name": a.get("name", ""), "url": a.get("browser_download_url", ""),
+             "size": a.get("size", 0)}
+            for a in data.get("assets") or []
+            if str(a.get("name", "")).lower().endswith(".exe")
+        ],
+    }
+
+
+def pick_installer_asset(assets):
+    exes = [a for a in assets if str(a.get("name", "")).lower().endswith(".exe")]
+    pref = [a for a in exes if "gui" in a["name"].lower()]
+    pool = pref or exes
+    return pool[0] if pool else None
+
+
+def _download_once(url, dest, progress, timeout, chunk_size):
+    req = urllib.request.Request(url, headers={"User-Agent": f"{APP_NAME}/{VERSION}"})
+    started = time.time()
+    with urllib.request.urlopen(req, timeout=timeout) as resp, open(dest, "wb") as f:
+        total = int(resp.headers.get("Content-Length") or 0)
+        done = 0
+        while True:
+            block = resp.read(chunk_size)
+            if not block:
+                break
+            f.write(block)
+            done += len(block)
+            if progress:
+                progress(done, total)
+    return done, time.time() - started
+
+
+def download_to_file(url, dest, progress=None, timeout=DOWNLOAD_TIMEOUT,
+                     chunk_size=65536, retries=DOWNLOAD_RETRIES):
+    last_exc = None
+    for attempt in range(1, retries + 1):
+        try:
+            return _download_once(url, dest, progress, timeout, chunk_size)
+        except Exception as exc:
+            last_exc = exc
+            try:
+                os.remove(dest)
+            except OSError:
+                pass
+            if attempt < retries:
+                time.sleep(min(2 ** attempt, 5))
+    raise last_exc
 
 
 def _deep_clean():
@@ -134,6 +218,7 @@ class App(ctk.CTk):
 
         self._mode = "quick"
         self._busy = False
+        self._updating = False
         self._pulsing = False
         self._phase = 0.0
         self._pos = 0
@@ -145,6 +230,7 @@ class App(ctk.CTk):
         self._select("quick")
         self._welcome()
         self._poll_log()
+        self._cleanup_stale_installers()
         self._check_admin()
 
     # ------------------------------------------------------------------ UI
@@ -209,6 +295,12 @@ class App(ctk.CTk):
                             text_color=MUTED, hover_color=SURFACE2,
                             command=self._open_reports)
         rep.pack(side="bottom", fill="x", padx=12, pady=2)
+
+        self._upd_btn = ctk.CTkButton(sb, text="Check for Updates", anchor="w", height=32,
+                                      corner_radius=8, font=("Segoe UI", 12),
+                                      fg_color="transparent", text_color=MUTED,
+                                      hover_color=SURFACE2, command=self._check_updates)
+        self._upd_btn.pack(side="bottom", fill="x", padx=12)
 
     def _build_main(self):
         m = ctk.CTkFrame(self, fg_color="transparent")
@@ -469,6 +561,198 @@ class App(ctk.CTk):
                 tc.console.print(f"  {lab:<26}{tc.fmt_size(size):>10}  {bar}  {100 * size / total:4.1f}%")
             tc.console.print()
 
+    # ------------------------------------------------------------ updates
+
+    def _cleanup_stale_installers(self):
+        if getattr(sys, "frozen", False):
+            for p in (sys.executable + ".old", sys.executable + ".update"):
+                try:
+                    if os.path.exists(p):
+                        os.remove(p)
+                except OSError:
+                    pass
+
+    def _check_updates(self):
+        if self._busy or self._updating:
+            return
+        self._upd_btn.configure(state="disabled", text="Checking…")
+        self._log_line("Checking GitHub for a new release…")
+
+        def work():
+            rel, err = None, ""
+            try:
+                rel = fetch_latest_release()
+            except urllib.error.HTTPError as exc:
+                err = {404: "no published release on GitHub yet",
+                       403: "GitHub rate limit — try again later"}.get(exc.code,
+                                                                      f"HTTP {exc.code}")
+            except Exception as exc:
+                err = str(exc) or type(exc).__name__
+            self.after(0, lambda: self._updates_checked(rel, err))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _updates_checked(self, rel, err):
+        self._upd_btn.configure(state="normal", text="Check for Updates")
+        if rel is None:
+            self._log_line(f"Update check failed: {err}")
+            return
+        if not is_newer_version(rel["tag"]):
+            self._log_line(f"You're up to date — v{VERSION} (latest release {rel['tag']})")
+            return
+        asset = pick_installer_asset(rel["assets"])
+        self._log_line(f"Update available: {rel['tag']}  (current v{VERSION})")
+        if self._show_update_dialog(rel, asset) != "install":
+            return
+        if not asset:
+            self._log_line("No installer attached to the release — opening the page.")
+            try:
+                os.startfile(rel["page"])
+            except Exception:
+                pass
+        elif getattr(sys, "frozen", False):
+            self._install_update(asset)
+        else:
+            self._log_line("Running from source — opening the releases page instead.")
+            try:
+                os.startfile(rel["page"])
+            except Exception:
+                pass
+
+    def _show_update_dialog(self, rel, asset):
+        dlg = ctk.CTkToplevel(self, fg_color=SURFACE, corner_radius=14)
+        dlg.title("Update available")
+        w, h = 480, 410
+        dlg.resizable(False, False)
+        dlg.transient(self)
+        x = self.winfo_x() + max(0, (self.winfo_width() - w) // 2)
+        y = self.winfo_y() + max(0, (self.winfo_height() - h) // 2)
+        dlg.geometry(f"{w}x{h}+{x}+{y}")
+        dlg.attributes("-topmost", True)
+        res = {"v": None}
+
+        head = ctk.CTkFrame(dlg, fg_color="transparent")
+        head.pack(fill="x", padx=24, pady=(22, 2))
+        ctk.CTkLabel(head, text=f"{rel['tag']} is available",
+                     font=("Segoe UI Semibold", 17), text_color=TEXT).pack(side="left")
+        ctk.CTkLabel(head, text=f"you have v{VERSION}", font=("Segoe UI", 11),
+                     text_color=MUTED).pack(side="right", pady=(6, 0))
+        size = f"  ·  {asset['size'] / 1024 ** 2:.1f} MB installer" if asset else ""
+        ctk.CTkLabel(dlg, text=(rel.get("title") or "New version") + size,
+                     font=("Segoe UI", 11), text_color=MUTED,
+                     anchor="w").pack(fill="x", padx=26)
+
+        box = ctk.CTkTextbox(dlg, font=("Consolas", 11), fg_color=SURFACE2,
+                             text_color=MUTED, corner_radius=10, wrap="word", height=180)
+        box.pack(fill="both", expand=True, padx=24, pady=(12, 8))
+        box.insert("1.0", (rel.get("notes") or "No release notes.").strip()[:4000])
+        box.configure(state="disabled")
+
+        row = ctk.CTkFrame(dlg, fg_color="transparent")
+        row.pack(side="bottom", fill="x", padx=24, pady=(0, 18))
+
+        def done(v):
+            res["v"] = v
+            dlg.destroy()
+
+        ctk.CTkButton(row, text="Download & Install", width=150, corner_radius=8,
+                      command=lambda: done("install"), fg_color=ACCENT,
+                      hover_color=ACCENT_DK, text_color=ON_ACCENT,
+                      font=("Segoe UI Semibold", 12)).pack(side="right")
+        ctk.CTkButton(row, text="GitHub page", width=110, corner_radius=8,
+                      command=lambda: done("page"), fg_color=SURFACE2,
+                      hover_color=BORDER, text_color=TEXT,
+                      font=("Segoe UI", 12)).pack(side="right", padx=(0, 8))
+        ctk.CTkButton(row, text="Later", width=80, corner_radius=8,
+                      command=lambda: done(None), fg_color="transparent",
+                      hover_color=SURFACE2, text_color=MUTED,
+                      border_width=1, border_color=BORDER,
+                      font=("Segoe UI", 12)).pack(side="right")
+        try:
+            dlg.grab_set()
+        except Exception:
+            pass
+        dlg.wait_window()
+        if res["v"] == "page":
+            try:
+                os.startfile(rel["page"])
+            except Exception:
+                pass
+        return res["v"]
+
+    def _install_update(self, asset):
+        self._busy = True
+        self._updating = True
+        self._pulsing = False
+        self._upd_btn.configure(state="disabled", text="Downloading…")
+        self._start.configure(state="disabled")
+        for b in self._btns.values():
+            b.configure(state="disabled")
+        exe = sys.executable
+        tmp = exe + ".update"
+
+        def prog(done, total):
+            frac = min(1.0, done / float(total)) if total else 0.0
+            self.after(0, lambda fr=frac: self._bar.set(fr))
+
+        def work():
+            ok, msg = True, ""
+            try:
+                _, secs = download_to_file(asset["url"], tmp, progress=prog)
+                self.after(0, lambda s=secs: self._bar.set(1.0))
+                self._log_line_safe(f"Downloaded {asset['name']} in {s:.1f}s — installing…")
+            except Exception as exc:
+                ok, msg = False, f"download failed ({exc})"
+            if ok:
+                try:
+                    old = exe + ".old"
+                    if os.path.exists(old):
+                        os.remove(old)
+                    os.rename(exe, old)
+                    try:
+                        os.replace(tmp, exe)
+                    except OSError:
+                        os.rename(old, exe)
+                        raise
+                except PermissionError:
+                    ok, msg = False, ("cannot write next to the running exe — "
+                                      "move the app to a writable folder and retry")
+                except Exception as exc:
+                    ok, msg = False, str(exc) or type(exc).__name__
+            if not ok:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+            self.after(0, lambda: self._update_finished(ok, msg, asset))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _log_line_safe(self, s):
+        self.after(0, lambda: self._log_line(s))
+
+    def _update_finished(self, ok, msg, asset):
+        self._busy = False
+        self._updating = False
+        self._bar.set(0)
+        self._start.configure(state="normal", text="Run Analysis" if self._mode == "analyze"
+                              else f"Start {MODE_NAME[self._mode]}")
+        for b in self._btns.values():
+            b.configure(state="normal")
+        if not ok:
+            self._upd_btn.configure(state="normal", text="Check for Updates")
+            self._log_line(f"Update failed: {msg}")
+            return
+        self._log_line(f"Installed {asset['name']} — restarting…")
+        try:
+            subprocess.Popen([sys.executable], cwd=os.path.dirname(sys.executable),
+                             close_fds=True)
+        except Exception as exc:
+            self._log_line(f"Restart failed: {exc} — start the app manually.")
+            self._upd_btn.configure(state="normal", text="Check for Updates")
+            return
+        self.after(250, self.destroy)
+
     # ------------------------------------------------------------- admin
 
     def _check_admin(self):
@@ -557,7 +841,7 @@ class App(ctk.CTk):
 def main():
     app = App()
     if "--selftest" in sys.argv:
-        app.after(1600, app.destroy)
+        app.after(int(os.environ.get("WTC_SELFTEST_MS", "1600")), app.destroy)
     app.mainloop()
 
 

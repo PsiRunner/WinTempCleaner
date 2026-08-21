@@ -172,10 +172,21 @@ GUI build:
 
 ```batch
 pip install pyinstaller customtkinter rich
-pyinstaller --onefile --noconsole --uac-admin --collect-all customtkinter `
-    --name "WindowsTempCleanerGUI" `
+pyinstaller --onefile --noconsole --uac-admin --icon "Icon.ico" ^
+    --collect-all customtkinter ^
+    --exclude-module PyQt5 --exclude-module PyQt6 ^
+    --exclude-module PySide2 --exclude-module PySide6 ^
+    --exclude-module numpy --exclude-module pandas --exclude-module scipy ^
+    --exclude-module matplotlib --exclude-module PIL ^
+    --exclude-module IPython --exclude-module jedi --exclude-module parso ^
+    --exclude-module jupyter --exclude-module notebook ^
+    --exclude-module pythonnet --exclude-module clr ^
+    --name "WindowsTempCleanerGUI" ^
     temp_cleaner_gui.py
 ```
+
+> The `--exclude-module` flags stop PyInstaller from bundling unrelated
+> packages installed in your global Python environment (~80 MB → ~17 MB).
 
 The `.exe` will be placed in the `dist/` folder.
 
