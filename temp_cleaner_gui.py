@@ -802,7 +802,7 @@ class App(ctk.CTk):
 
         def show(path):
             try:
-                with open(path, encoding="utf-8") as f:
+                with open(path, encoding="utf-8-sig") as f:
                     txt = json.dumps(json.load(f), indent=2, ensure_ascii=False)
             except Exception as exc:
                 txt = f"Could not read report: {exc}"
@@ -817,13 +817,13 @@ class App(ctk.CTk):
                          text_color=MUTED).pack(padx=16, pady=16)
         for p in files:
             try:
-                with open(p, encoding="utf-8") as f:
+                with open(p, encoding="utf-8-sig") as f:
                     d = json.load(f)
                 cap = f"{d.get('mode', '?')} · {tc.fmt_size(d.get('totals', {}).get('bytes_freed', 0))}"
             except Exception:
                 cap = ""
             ctk.CTkButton(left, text=f"{os.path.basename(p)}\n{cap}", anchor="w",
-                          justify="left", height=46, corner_radius=8,
+                          height=46, corner_radius=8,
                           fg_color="transparent", hover_color=SURFACE2,
                           text_color=TEXT, font=("Segoe UI", 11),
                           command=lambda pp=p: show(pp)).pack(fill="x", pady=1)

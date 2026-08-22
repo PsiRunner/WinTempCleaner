@@ -3,47 +3,60 @@
 </p>
 
 <h1 align="center">🧹 WinTempCleaner</h1>
-<p align="center"><strong>Portable Windows Temp &amp; Cache Cleaner — CLI + GUI</strong></p>
+
+<p align="center">
+  <strong>A portable Windows temp &amp; cache cleaner — with a minimalistic GUI,<br>a classic CLI, and a one-click self-updater.</strong>
+</p>
+
+<p align="center">
+  <a href="#-screenshots">Screenshots</a> ·
+  <a href="#-cleaning-modes">Modes</a> ·
+  <a href="#️-safety-model">Safety</a> ·
+  <a href="#-quick-start">Quick start</a> ·
+  <a href="#-auto-update-gui">Auto-update</a> ·
+  <a href="#-building-from-source">Build</a>
+</p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/platform-Windows%2010%2F11-blue?style=flat-square" alt="Platform">
   <img src="https://img.shields.io/badge/version-v3.1-purple?style=flat-square" alt="Version">
   <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License">
   <img src="https://img.shields.io/badge/build-PyInstaller-orange?style=flat-square" alt="Build">
-  <br>
-  <sub>Portable · No dependencies · UAC-aware · Safety-first · Self-updating</sub>
 </p>
 
 ---
 
-## Overview
+## 📖 About
 
 WinTempCleaner sweeps temporary files, browser caches, GPU shader caches, app caches, developer caches and system logs — then shows exactly how much space was freed.
 
-- **Two ways to use it:** a minimalistic **dark GUI** or the classic **interactive CLI**.
-- **One file, no install.** Download the `.exe`, double-click, accept UAC, done.
-- **Self-updating:** the GUI checks GitHub Releases on demand and installs new versions in one click — no background polling, no spam.
-
-<br />
+- **One file, no install** — grab an `.exe` from [Releases](../../releases/latest), double-click, accept UAC, done.
+- **Two interfaces** — a minimalistic dark **GUI** and the classic interactive **CLI**, powered by the same engine.
+- **Self-updating** — the GUI compares against GitHub Releases on demand and installs new versions in place. Checks only happen when *you* click: no background polling, no notifications.
+- **Safety-first** — tiered cleaning modes, age limits, undoable deletions, locked-file tolerance.
 
 <p align="center">
-  <img src="screenshots/main.png" width="820" alt="WinTempCleaner GUI dashboard">
+  <img src="screenshots/main.png" width="820" alt="The WinTempCleaner dashboard: mode sidebar, stat cards, live log">
 </p>
 
 ---
 
-## ✨ Screenshots
+## 🖼️ Screenshots
 
-### Analyze Space — see what is eating your disk
+### Analyze Space
+
+A threaded scan across 50+ locations with grouped size bars — nothing is deleted.
 
 <p align="center">
-  <img src="screenshots/analyze.png" width="820" alt="Analyze Space view with size bars">
+  <img src="screenshots/analyze.png" width="820" alt="Analyze Space view showing grouped size bars per location"/>
 </p>
 
-### Built-in updater — one click to update
+### Built-in updater
+
+Release notes, installer size and one-click update — straight from GitHub Releases.
 
 <p align="center">
-  <img src="screenshots/update.png" width="640" alt="Update available dialog with release notes">
+  <img src="screenshots/update.png" width="560" alt="Update available dialog showing version, notes and Download & Install button"/>
 </p>
 
 ---
@@ -52,53 +65,45 @@ WinTempCleaner sweeps temporary files, browser caches, GPU shader caches, app ca
 
 | Mode | Scope | Safety |
 |---|---|---|
-| **Quick Clean** | `%TEMP%`, `C:\Windows\Temp`, Prefetch, Chromium/Firefox caches, Recycle Bin | SAFE |
-| **Deep Clean** | Everything safe: Quick + Shaders & Tiles + Windows Files + App Caches + Dev Caches | SAFE |
-| **Shaders & Tiles** | DirectX / NVIDIA shader caches, thumbnail, icon & font caches | SAFE |
-| **Windows Files** | Windows Update cache, Panther/CBS logs, minidumps, WER reports, CrashDumps, MEMORY.DMP | SAFE |
-| **App Caches** | Discord, Slack, Teams (classic + new), Spotify, VSCode, Cursor, Zoom logs | SAFE |
-| **Dev Caches** | npm, pip, NuGet, Gradle, Go build caches | SAFE |
-| **Extended Clean** | Steam shader caches, LiveKernel / DISM / MoSetup debug logs, junk-file sweep (`*.tmp`, `~$*`, `*.bak`) | ⚠️ CAUTION |
-| **Analyze Space** | Scan-only report of 50+ locations — nothing is deleted | SCAN |
-
-The same modes are available in both interfaces:
-
-| GUI | CLI menu |
-|---|---|
-| sidebar buttons | `1`–`9` keys, plus `R` for reports and `Q` to quit |
+| **Quick Clean** | `%TEMP%`, `C:\Windows\Temp`, Prefetch, Chromium & Firefox caches, Recycle Bin | ✅ SAFE |
+| **Deep Clean** | Everything safe — Quick + Shaders & Tiles + Windows Files + App Caches + Dev Caches | ✅ SAFE |
+| **Shaders & Tiles** | DirectX / NVIDIA shader caches, thumbnail, icon & font caches | ✅ SAFE |
+| **Windows Files** | Windows Update cache, Panther/CBS logs, minidumps, WER reports, CrashDumps, MEMORY.DMP | ✅ SAFE |
+| **App Caches** | Discord, Slack, Teams (classic + new), Spotify, VSCode, Cursor, Zoom logs | ✅ SAFE |
+| **Dev Caches** | npm, pip, NuGet, Gradle, Go build caches | ✅ SAFE |
+| **Extended Clean** | Steam shader caches, LiveKernel / DISM / MoSetup debug logs, junk sweep (`*.tmp`, `~$*`, `*.bak`, `*-001.*`) | ⚠️ CAUTION |
+| **Analyze Space** | Scan-only report of every tracked location | 🔍 SCAN |
 
 ---
 
 ## 🛡️ Safety model
 
-Everything is split into tiers:
+Cleaning is split into two tiers:
 
-- **SAFE** — cleanable any time: temp dirs, browser/app/dev caches, icon & font caches, shader & thumbnail caches, system logs & dumps.
-- **CAUTION** — only via **Extended Clean**, after an explicit confirmation: game shader caches (games recompile on next launch), system debug logs (diagnostics are lost), profile-wide junk-file sweep.
+- **SAFE** — always cleanable: temp dirs, browser/app/dev caches, icon & font caches, shader & thumbnail caches, system logs & dumps.
+- **CAUTION** — reachable only through **Extended Clean** and only after an explicit confirmation. Game shader caches recompile on next launch; debug logs are lost forever.
 
-Two more safety layers apply everywhere:
+On top of that, two protective layers apply to everything:
 
-| Layer | Default | Detail |
+| Layer | Default | What it does |
 |---|---|---|
-| **Age limit** | 1 day | Only files older than *N* days (1 / 3 / 7 / 30) are deleted — in-use and session files are never touched. Set to `Off` to disable. |
-| **Recycle Bin mode** | Off | Deletions become undoable via the Recycle Bin. Note: Quick/Deep then skip emptying the bin so items stay recoverable. |
+| **Age limit** | `1 day` | Only items older than N days (1 / 3 / 7 / 30) are deleted — in-use and session files are never touched. Set `Off` to disable. |
+| **Recycle Bin mode** | `Off` | Deletions go to the Recycle Bin instead of being permanent (undoable). Quick/Deep then skip emptying the bin so you can recover items. |
 
-Locked files (in use by running apps) are skipped and reported — no Explorer popups, no crashes.
+Locked files (held by running apps) are skipped and counted — no Explorer popups, no crashes.
 
 ---
 
 ## 🚀 Quick start
 
-### GUI (recommended)
+1. Head to **[Releases](../../releases/latest)** and download:
+   - `WindowsTempCleanerGUI-V*.exe` — the **GUI** (recommended)
+   - `WindowsTempCleaner-V*.exe` — the **CLI**
+2. Double-click the file and accept the UAC prompt (administrator rights let it reach system locations).
+3. In the GUI pick a mode → press **Start**. In the CLI type a menu number.
 
-1. Grab `WindowsTempCleanerGUI.exe` from [Releases](../../releases/latest).
-2. Double-click → accept the UAC prompt.
-3. Pick a mode on the left, press **Start**.
-
-### CLI
-
-1. Grab `WindowsTempCleaner.exe` from [Releases](../../releases/latest).
-2. Double-click → choose an option from the menu.
+<details>
+<summary><strong>CLI menu</strong></summary>
 
 ```
   Windows Temp / Cache Cleaner
@@ -118,6 +123,8 @@ Locked files (in use by running apps) are skipped and reported — no Explorer p
    Q  Quit
 ```
 
+</details>
+
 ### From source
 
 ```batch
@@ -131,42 +138,28 @@ python temp_cleaner_gui.py
 
 Press **Check for Updates** in the sidebar:
 
-- The app compares your version against the latest GitHub Release.
-- If a newer version exists you get release notes and a **Download & Install** button.
-- The installer swaps itself in place and relaunches — done.
-- Checks happen **only when you click**; there are no background timers or notifications.
-- Running from source instead? The button opens the releases page.
+1. The app queries the latest GitHub Release and compares versions.
+2. If there's something new you get the release notes and a **Download & Install** button.
+3. The new executable replaces the running one in place and the app relaunches.
 
----
+Design guarantees:
 
-## 📊 Example output
-
-```
-== Core Temp & Browser ==
-  [User Temp]       OK  deleted 456 | locked 2 | 31 too new | freed 1.24 GB
-  [Windows Temp]    OK  deleted 89  | locked 0 | freed 45.2 MB
-  [Prefetch]        OK  deleted 124 | locked 0 | freed 8.7 MB
-  [Chrome Cache]    !   deleted 312 | locked 1 | freed 892.1 MB
-  [Edge Cache]      OK  deleted 0   | nothing to clean
-  [Recycle Bin]     OK  emptied
-
-          Cleanup Complete
-  Space freed ................. 2.18 GB
-  Duration .................... 4.2s
-  Items deleted ............... 2,185
-```
-
-Every run can save CSV + JSON reports to `Reports/` (viewable inside both apps).
+- **On demand only** — checks never run in the background; no timers, no toasts.
+- **Extended timeouts + retries** — downloads survive slow or flaky connections (300 s socket timeout, 3 attempts).
+- **Safe swap** — the running exe is renamed `.old` before the replacement moves in; failed installs roll back automatically.
+- **Source installs** — if you run from source, the button simply opens the releases page.
 
 ---
 
 ## 📦 Requirements
 
-| What | Detail |
+| | |
 |---|---|
 | OS | Windows 10 / 11 (x64) |
-| Permission | Administrator rights (auto-prompted via UAC) |
-| From source only | Python 3.10+, `customtkinter`, `rich` |
+| Permissions | Administrator (auto-prompted via UAC) |
+| Source only | Python 3.10+, [`customtkinter`](https://github.com/TomSchimansky/CustomTkinter), [`rich`](https://github.com/Textualize/rich) |
+
+---
 
 ## 🔨 Building from source
 
@@ -199,18 +192,16 @@ pyinstaller --onefile --noconsole --uac-admin --icon "Icon.ico" ^
 > The `--exclude-module` flags stop PyInstaller from bundling unrelated packages
 > installed in your global Python environment (~80 MB → ~17 MB).
 
+---
+
 ## 🗂️ Files created at runtime
 
-| File / Folder | Purpose |
+| Path | Purpose |
 |---|---|
-| `cleaner_config.ini` | Persisted options (age limit, recycle bin mode, auto-reports) |
-| `Reports/` | CSV + JSON reports for every cleanup run |
-| `cleaner_error.log` | Written only on unexpected crashes (CLI) |
+| `cleaner_config.ini` | Persisted options — age limit, Recycle Bin mode, auto-reports |
+| `Reports/*.csv|.json` | Per-run cleanup reports (viewable inside both apps) |
+| `cleaner_error.log` | Written only when the CLI crashes unexpectedly |
 
 ## 📄 License
 
-Licensed under the MIT License — see [LICENSE](LICENSE).
-
----
-
-<p align="center"><sub>Made with Python, CustomTkinter, Rich, and PyInstaller.</sub></p>
+[MIT](LICENSE) — free to use, modify and ship.

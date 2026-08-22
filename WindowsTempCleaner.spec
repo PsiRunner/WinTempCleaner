@@ -10,7 +10,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['matplotlib', 'numpy', 'PyQt6', 'PySide6', 'tkinter', 'IPython', 'jupyter', 'PIL', 'pandas', 'scipy', 'PyQt5', 'wx', 'PyQt6.QtCore', 'PyQt6.QtGui', 'PyQt6.QtWidgets'],
+    excludes=['PyQt5', 'PyQt6', 'PySide2', 'PySide6', 'numpy', 'pandas', 'scipy', 'matplotlib', 'PIL', 'IPython', 'jedi', 'parso', 'jupyter', 'notebook', 'pythonnet', 'clr', 'customtkinter'],
     noarchive=False,
     optimize=0,
 )
@@ -36,4 +36,5 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     uac_admin=True,
+    icon=['D:\\Projects\\WinTempCleaner\\Icon.ico'],
 )
