@@ -18,11 +18,14 @@ import collections
 import subprocess
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import customtkinter as ctk
+from tkinter import filedialog
 from rich.console import Console
 
 import temp_cleaner as tc
+from icons import get_icon, SpinningIcon, NAV_ICONS, CARD_ICONS, MISC_ICONS
 
 APP_NAME = "WinTempCleaner"
 VERSION = tc.APP_VERSION
@@ -47,8 +50,10 @@ MODES = [
     ("shaders",  "Shaders & Tiles", "GPU, thumbnail, icon & font caches",           "safe"),
     ("windows",  "Windows Files",   "Logs, dumps, Windows Update cache",            "safe"),
     ("apps",     "App Caches",      "Discord, Teams, Spotify, Slack, VSCode",       "safe"),
-    ("dev",      "Dev Caches",      "npm, pip, NuGet, Gradle, Go",                  "safe"),
+    ("dev",      "Dev Caches",      "npm, pip, NuGet, Gradle, Go, Cargo",           "safe"),
+    ("games",    "Games & Launchers", "Steam client cache, crash dumps",           "safe"),
     ("extended", "Extended Clean",  "Game shaders, debug logs, junk sweep",         "caution"),
+    ("maintenance", "System Maintenance", "WinSxS component cleanup (DISM)",       "caution"),
     ("analyze",  "Analyze Space",   "Scan only — see what is eating your disk",     "info"),
 ]
 MODE_NAME = {k: n for k, n, _d, _t in MODES}
@@ -145,6 +150,7 @@ def _deep_clean():
     total += tc.clear_windows_files()
     total += tc.clear_app_caches()
     total += tc.clear_dev_caches()
+    total += tc.clear_game_caches()
     return total
 
 
@@ -156,7 +162,89 @@ RUNNERS = {
     "apps":    tc.clear_app_caches,
     "dev":     tc.clear_dev_caches,
     "extended": tc.clear_extended,
+    "games":   tc.clear_game_caches,
+    "maintenance": tc.clear_system_maintenance,
 }
+
+PREVIEW_NOTES = {
+    "quick":    "+ Recycle Bin also gets emptied (not sized here)",
+    "deep":     "+ Recycle Bin also gets emptied (not sized here)",
+    "windows":  "+ Windows.old is asked at runtime (not sized here)",
+    "extended": "+ junk-file sweep runs at runtime (not estimated)",
+    "maintenance": "WinSxS isn't pre-scanned (slow) — space freed is measured "
+                   "by free-disk-space delta after DISM runs",
+}
+
+
+def _mode_items(mode):
+    if mode == "quick":
+        return [
+            ("User Temp", tc.TEMP, "core"),
+            ("Windows Temp", r"C:\Windows\Temp", "system"),
+            ("Prefetch", r"C:\Windows\Prefetch", "core"),
+        ] + tc._browser_cache_items() + tc._firefox_cache_items()
+    if mode == "deep":
+        return (_mode_items("quick") + _mode_items("shaders") +
+                _mode_items("windows") + _mode_items("apps") + _mode_items("dev") +
+                _mode_items("games"))
+    if mode == "shaders":
+        return tc._cache_tile_items() + [
+            ("Thumbnail Cache", os.path.join(tc.LOCAL, r"Microsoft\Windows\Explorer",
+                                             "thumbcache_*.db"), "caches"),
+            ("Icon Cache", os.path.join(tc.LOCAL, r"Microsoft\Windows\Explorer",
+                                        "iconcache_*.db"), "caches"),
+            ("IconCache.db", os.path.join(tc.LOCAL, "IconCache.db"), "caches"),
+            ("Legacy WebCache", os.path.join(tc.LOCAL, r"Microsoft\Windows\WebCache",
+                                             "WebCacheV01.dat"), "caches"),
+        ]
+    if mode == "windows":
+        return [
+            ("WU Download", r"C:\Windows\SoftwareDistribution\Download", "system"),
+            ("Delivery Opt.", r"C:\Windows\SoftwareDistribution\DeliveryOptimization", "system"),
+        ] + tc._system_items() + [("MEMORY.DMP", r"C:\Windows\MEMORY.DMP", "system")]
+    if mode == "apps":
+        return tc._app_cache_items()
+    if mode == "dev":
+        return tc._dev_cache_items()
+    if mode == "extended":
+        return tc._extended_items()
+    if mode == "games":
+        return tc._game_cache_items()
+    if mode == "maintenance":
+        return []   # WinSxS isn't pre-scanned — see PREVIEW_NOTES
+    return []
+
+
+def _scan_items(items):
+    expanded = []
+    groups = {}
+    for label, path, g in items:
+        groups.setdefault(label, g)
+        if any(ch in path for ch in "*?["):
+            for p in glob.glob(path):
+                expanded.append((label, p))
+        else:
+            expanded.append((label, path))
+    results = {}
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        futures = {ex.submit(tc.calc_size, p): label for label, p in expanded}
+        for fut in as_completed(futures):
+            label = futures[fut]
+            try:
+                sz = fut.result()
+            except Exception:
+                sz = 0
+            results[label] = results.get(label, 0) + sz
+    return {k: v for k, v in results.items() if v > 0}, groups
+
+
+def _bar_row(label, size, total, width=26):
+    lab = label if len(label) <= width else label[:width - 1] + "…"
+    if not total:
+        return f"  {lab:<26}{tc.fmt_size(size):>10}"
+    filled = max(1, round(width * size / total))
+    bar = "█" * filled + "·" * (width - filled)
+    return f"  {lab:<26}{tc.fmt_size(size):>10}  {bar}  {100 * size / total:4.1f}%"
 
 
 class _Buffer(io.StringIO):
@@ -201,6 +289,91 @@ class _Confirm:
 tc.Confirm = _Confirm
 
 
+class SplashScreen(ctk.CTkToplevel):
+    """
+    Minimal on-brand splash shown while App() builds its UI. Frameless,
+    centered, matches the app's own dark/teal palette exactly (same BG/
+    SURFACE2/BORDER/ACCENT constants — not a separate design).
+
+    usage:
+        splash = SplashScreen(self)
+        splash.set_status("Building interface…", 0.4)
+        ... do real init work ...
+        splash.close()
+    """
+
+    WIDTH, HEIGHT = 440, 260
+    MIN_STEP_MS = 120   # floor per status update so progress is perceptible,
+                         # not a hard delay — real work exceeding this just runs
+
+    def __init__(self, master):
+        super().__init__(master)
+        # Hide via alpha, NOT overrideredirect/withdraw — setting overrideredirect
+        # synchronously on a brand-new Toplevel is a known cause of blank/black
+        # renders on Windows (the window gets mapped mid-configure). Same for
+        # withdraw()/deiconify() on a CTk root — see TomSchimansky/CustomTkinter#59.
+        self.attributes("-alpha", 0)
+        self.configure(fg_color=BORDER)  # 1px "border" via padding trick below
+
+        sw = self.winfo_screenwidth()
+        sh = self.winfo_screenheight()
+        x = (sw - self.WIDTH) // 2
+        y = (sh - self.HEIGHT) // 2
+        self.geometry(f"{self.WIDTH}x{self.HEIGHT}+{x}+{y}")
+
+        card = ctk.CTkFrame(self, fg_color=BG, corner_radius=0)
+        card.pack(fill="both", expand=True, padx=1, pady=1)
+
+        ring = ctk.CTkFrame(card, width=56, height=56, corner_radius=28,
+                            fg_color="transparent", border_width=2, border_color=ACCENT)
+        ring.pack(pady=(42, 16))
+        ring.pack_propagate(False)
+        ctk.CTkLabel(ring, text="",
+                    image=get_icon(NAV_ICONS["quick"], size=24, color=ACCENT)).pack(expand=True)
+
+        word = ctk.CTkFrame(card, fg_color="transparent")
+        word.pack()
+        ctk.CTkLabel(word, text="WinTemp", font=("Segoe UI Semibold", 21),
+                    text_color=TEXT).pack(side="left")
+        ctk.CTkLabel(word, text="Cleaner", font=("Segoe UI Semibold", 21),
+                    text_color=ACCENT).pack(side="left")
+
+        ctk.CTkLabel(card, text=f"v{VERSION}", font=("Segoe UI", 11),
+                    text_color=MUTED).pack(pady=(2, 0))
+
+        self._bar = ctk.CTkProgressBar(card, height=3, corner_radius=2,
+                                       progress_color=ACCENT, fg_color=SURFACE2)
+        self._bar.pack(fill="x", padx=32, pady=(32, 0))
+        self._bar.set(0)
+
+        self._status = ctk.CTkLabel(card, text="Starting…", font=("Segoe UI", 11),
+                                    text_color=MUTED)
+        self._status.pack(pady=(10, 0))
+
+        self.update_idletasks()
+        self.update()
+
+        # Frameless + on-top are applied only after the window is fully built
+        # and positioned, then we fade it in. This ordering is what avoids the
+        # Windows blank-render race mentioned above.
+        if sys.platform.startswith("win"):
+            self.after(30, lambda: self.overrideredirect(True))
+        else:
+            self.overrideredirect(True)
+        self.attributes("-topmost", True)
+        self.after(60, lambda: self.attributes("-alpha", 1))
+        self.update()
+
+    def set_status(self, text, progress):
+        self._status.configure(text=text)
+        self._bar.set(progress)
+        self.update()
+        time.sleep(self.MIN_STEP_MS / 1000)
+
+    def close(self):
+        self.destroy()
+
+
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
@@ -212,9 +385,12 @@ class App(ctk.CTk):
                 self.iconbitmap(self._icon)
             except Exception:
                 pass
-        self.geometry("1020x680")
-        self.minsize(880, 620)
+        self.geometry("1020x780")
+        self.minsize(880, 720)
         self.configure(fg_color=BG)
+
+        self.attributes("-alpha", 0)   # hide without withdraw() — see SplashScreen note
+        splash = SplashScreen(self)
 
         self._mode = "quick"
         self._busy = False
@@ -223,15 +399,31 @@ class App(ctk.CTk):
         self._phase = 0.0
         self._pos = 0
         self._reclaim = 0
+        self._preview_seq = 0
         self._btns = {}
+        self._card_caps = {}
 
+        splash.set_status("Building interface…", 0.35)
         self._build_sidebar()
         self._build_main()
+        splash.set_status("Restoring last session…", 0.6)
         self._select("quick")
-        self._welcome()
         self._poll_log()
+        splash.set_status("Checking installers…", 0.8)
         self._cleanup_stale_installers()
+        splash.set_status("Checking permissions…", 0.95)
         self._check_admin()
+
+        splash.set_status("Ready", 1.0)
+        splash.close()
+        self.attributes("-alpha", 1)
+        self.lift()
+        self.focus_force()
+        # Windows' focus-stealing prevention often keeps a freshly-elevated
+        # process's window behind everything else even after focus_force().
+        # A brief topmost pulse forces it in front regardless.
+        self.attributes("-topmost", True)
+        self.after(200, lambda: self.attributes("-topmost", False))
 
     # ------------------------------------------------------------------ UI
 
@@ -241,7 +433,7 @@ class App(ctk.CTk):
         sb.pack_propagate(False)
 
         head = ctk.CTkFrame(sb, fg_color="transparent")
-        head.pack(fill="x", padx=20, pady=(22, 8))
+        head.pack(fill="x", padx=20, pady=(18, 8))
         ctk.CTkLabel(head, text=APP_NAME, font=("Segoe UI Semibold", 17),
                      text_color=TEXT).pack(anchor="w")
         ctk.CTkLabel(head, text=f"v{VERSION} · minimal GUI", font=("Segoe UI", 11),
@@ -251,13 +443,14 @@ class App(ctk.CTk):
         nav.pack(fill="x", padx=12, pady=(6, 0))
         for key, name, _desc, _tag in MODES:
             b = ctk.CTkButton(nav, text=name, anchor="w", height=34, corner_radius=8,
-                              font=("Segoe UI", 13), fg_color="transparent",
+                              image=get_icon(NAV_ICONS[key], size=17, color=MUTED),
+                              compound="left", font=("Segoe UI", 13), fg_color="transparent",
                               text_color=MUTED, hover_color=SURFACE2,
                               command=lambda k=key: self._select(k))
             b.pack(fill="x", pady=1)
             self._btns[key] = b
 
-        ctk.CTkFrame(sb, height=1, fg_color=BORDER).pack(fill="x", padx=20, pady=(14, 12))
+        ctk.CTkFrame(sb, height=1, fg_color=BORDER).pack(fill="x", padx=20, pady=(10, 10))
 
         opts = ctk.CTkFrame(sb, fg_color="transparent")
         opts.pack(fill="x", padx=20)
@@ -288,19 +481,38 @@ class App(ctk.CTk):
         self._sw_rep.pack(anchor="w")
 
         self._adm = ctk.CTkLabel(sb, text="", font=("Segoe UI", 11), text_color=MUTED)
-        self._adm.pack(side="bottom", pady=(0, 16))
+        self._adm.pack(side="bottom", pady=(0, 12))
 
         rep = ctk.CTkButton(sb, text="Reports", anchor="w", height=32, corner_radius=8,
-                            font=("Segoe UI", 12), fg_color="transparent",
+                            image=get_icon(MISC_ICONS["reports"], size=15, color=MUTED),
+                            compound="left", font=("Segoe UI", 12), fg_color="transparent",
                             text_color=MUTED, hover_color=SURFACE2,
                             command=self._open_reports)
         rep.pack(side="bottom", fill="x", padx=12, pady=2)
 
         self._upd_btn = ctk.CTkButton(sb, text="Check for Updates", anchor="w", height=32,
-                                      corner_radius=8, font=("Segoe UI", 12),
+                                      corner_radius=8,
+                                      image=get_icon(MISC_ICONS["updates"], size=15, color=MUTED),
+                                      compound="left", font=("Segoe UI", 12),
                                       fg_color="transparent", text_color=MUTED,
                                       hover_color=SURFACE2, command=self._check_updates)
         self._upd_btn.pack(side="bottom", fill="x", padx=12)
+
+        # Installers + Exclusions: identical full-width rows packed straight
+        # into the sidebar (an intermediate frame can end up clipping its
+        # children — CTk height propagation quirk), with even 4px gaps.
+        ctk.CTkButton(sb, text="Installers", anchor="w", height=32, corner_radius=8,
+                      image=get_icon(MISC_ICONS["installers"], size=15, color=MUTED),
+                      compound="left", font=("Segoe UI", 12), fg_color="transparent",
+                      hover_color=SURFACE2, text_color=MUTED,
+                      command=self._open_installers).pack(side="bottom", fill="x",
+                                                          padx=12, pady=(2, 4))
+        ctk.CTkButton(sb, text="Exclude", anchor="w", height=32, corner_radius=8,
+                      image=get_icon(MISC_ICONS["exclusions"], size=15, color=MUTED),
+                      compound="left", font=("Segoe UI", 12), fg_color="transparent",
+                      hover_color=SURFACE2, text_color=MUTED,
+                      command=self._open_exclusions).pack(side="bottom", fill="x",
+                                                          padx=12, pady=(0, 4))
 
     def _build_main(self):
         m = ctk.CTkFrame(self, fg_color="transparent")
@@ -317,7 +529,12 @@ class App(ctk.CTk):
                                  fg_color=SURFACE2, corner_radius=6, width=70, height=22,
                                  text_color=GREEN)
         self._tag.pack(side="left", padx=(12, 0), pady=(9, 0))
+        self._spinner = SpinningIcon(head, size=18, color=ACCENT)
+        # not packed yet — shown only while a job is running (see _run/_done)
+
         self._start = ctk.CTkButton(head, text="Start", width=150, height=42, corner_radius=10,
+                                    image=get_icon(MISC_ICONS["start"], size=14, color=ON_ACCENT),
+                                    compound="left",
                                     font=("Segoe UI Semibold", 14), fg_color=ACCENT,
                                     hover_color=ACCENT_DK, text_color=ON_ACCENT,
                                     command=self._run)
@@ -339,11 +556,14 @@ class App(ctk.CTk):
                              border_width=1, border_color=BORDER)
             f.grid(row=0, column=i, sticky="ew",
                    padx=(0 if i == 0 else 10, 0 if i == 3 else 0))
+            ctk.CTkLabel(f, text="", image=get_icon(CARD_ICONS[key], size=15, color=MUTED)
+                        ).pack(pady=(12, 0))
             v = ctk.CTkLabel(f, text="—", font=("Segoe UI Semibold", 21), text_color=TEXT)
-            v.pack(pady=(13, 1))
-            ctk.CTkLabel(f, text=cap, font=("Segoe UI", 11),
-                         text_color=MUTED).pack(pady=(0, 12))
+            v.pack(pady=(2, 1))
+            cap_lbl = ctk.CTkLabel(f, text=cap, font=("Segoe UI", 11), text_color=MUTED)
+            cap_lbl.pack(pady=(0, 12))
             self._cards[key] = v
+            self._card_caps[key] = cap_lbl
 
         self._log = ctk.CTkTextbox(m, font=("Consolas", 12), fg_color=SURFACE,
                                    text_color=TEXT, corner_radius=12, border_width=1,
@@ -364,10 +584,12 @@ class App(ctk.CTk):
         self._log.see("end")
         self._log.configure(state="disabled")
 
-    def _welcome(self):
-        self._log_line("Pick a mode on the left, then press Start.")
-        self._log_line("Everything runs in the background — the log updates live.")
-        self._log_line()
+    def _clear_log(self):
+        _buf.reset()
+        self._pos = 0
+        self._log.configure(state="normal")
+        self._log.delete("1.0", "end")
+        self._log.configure(state="disabled")
 
     def _poll_log(self):
         val = _buf.snapshot()
@@ -389,6 +611,69 @@ class App(ctk.CTk):
         self._bar.set(p if p <= 0.5 else 1 - p)
         self.after(30, self._pulse_loop)
 
+    # ------------------------------------------------------------ previews
+
+    def _start_preview(self, key):
+        if self._busy or self._updating:
+            return
+        seq = self._preview_seq + 1
+        self._preview_seq = seq
+        name = MODE_NAME[key]
+        note = PREVIEW_NOTES.get(key, "")
+        self._clear_log()
+        self._log_line(f"Estimating {name}…")
+        if note:
+            self._log_line(note)
+        self._pulsing = True
+        self._pulse_loop()
+
+        def work():
+            data, groups = {}, {}
+            try:
+                if key == "analyze":
+                    data, groups = tc.scan_all()
+                else:
+                    data, groups = _scan_items(_mode_items(key))
+            except Exception as exc:
+                self.after(0, lambda: self._preview_done(key, seq, None, str(exc)))
+                return
+            self.after(0, lambda: self._preview_done(key, seq, (data, groups), ""))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _preview_done(self, key, seq, payload, err):
+        if seq != self._preview_seq or self._busy:
+            return
+        self._pulsing = False
+        self._bar.set(0)
+        name = MODE_NAME[key]
+        if err:
+            self._log_line(f"Estimate unavailable: {err}")
+            return
+        data, groups = payload
+        total = sum(data.values())
+        if not data:
+            self._log_line("Nothing found to clean here — you're clean.")
+            return
+        tc.console.print()
+        tc.console.print(f"Estimated freeable: ~{tc.fmt_size(total)}")
+        tc.console.print()
+        rows = sorted(data.items(), key=lambda x: -x[1])
+        for g in ("core", "browser", "caches", "apps", "dev", "games", "system", "extended"):
+            items = [(l, s) for l, s in rows if groups.get(l, "other") == g]
+            if not items:
+                continue
+            tc.console.print(tc.GROUP_LABELS.get(g, g).upper())
+            for label, size in items:
+                tc.console.print(_bar_row(label, size, total))
+            tc.console.print()
+        self._cards["freed"].configure(text=f"~{tc.fmt_size(total)}")
+        cap = self._card_caps["freed"]
+        if key == "analyze":
+            cap.configure(text="total reclaimable")
+        else:
+            cap.configure(text="estimated freeable")
+
     def _age_label(self):
         return next(k for k, v in AGES.items() if v == tc.settings.age_days)
 
@@ -405,12 +690,14 @@ class App(ctk.CTk):
         for k, b in self._btns.items():
             sel = k == key
             b.configure(fg_color=SURFACE2 if sel else "transparent",
-                        text_color=ACCENT if sel else MUTED)
+                        text_color=ACCENT if sel else MUTED,
+                        image=get_icon(NAV_ICONS[k], size=17, color=ACCENT if sel else MUTED))
         name, desc, tag = next((n, d, t) for k, n, d, t in MODES if k == key)
         self._title.configure(text=name)
         self._desc.configure(text=desc)
         self._tag.configure(text=TAG_TEXT[tag], text_color=TAG_COLOR[tag])
         self._start.configure(text="Run Analysis" if key == "analyze" else f"Start {name}")
+        self._start_preview(key)
 
     def _ask(self, title, msg, ok="Continue", danger=False):
         dlg = ctk.CTkToplevel(self, fg_color=SURFACE)
@@ -466,20 +753,34 @@ class App(ctk.CTk):
                 ok="Run Extended", danger=True):
                 return
             _answers.append(True)
+        elif mode == "maintenance":
+            if not self._ask(
+                "System Maintenance",
+                "Runs Windows' official WinSxS component cleanup (DISM).\n"
+                "Only removes component versions Windows has already\n"
+                "marked safe to discard — recent updates stay uninstallable.\n\n"
+                "Requires admin and can take several minutes. Continue?",
+                ok="Run Cleanup", danger=True):
+                return
+            _answers.append(True)
         elif mode in ("deep", "windows"):
             _answers.append(False)
 
         self._busy = True
+        self._preview_seq += 1
         self._start.configure(state="disabled", text="Working…")
+        self._spinner.pack(side="right", padx=(0, 10))
+        self._spinner.start()
         for b in self._btns.values():
             b.configure(state="disabled")
         for c in self._cards.values():
             c.configure(text="—")
-        _buf.reset()
-        self._pos = 0
-        self._log.configure(state="normal")
-        self._log.delete("1.0", "end")
-        self._log.configure(state="disabled")
+        cap = self._card_caps["freed"]
+        if mode == "analyze":
+            cap.configure(text="total reclaimable")
+        else:
+            cap.configure(text="space freed")
+        self._clear_log()
         self._pulsing = True
         self._pulse_loop()
         threading.Thread(target=self._worker, args=(mode,), daemon=True).start()
@@ -513,6 +814,8 @@ class App(ctk.CTk):
         self._pulsing = False
         self._bar.set(0)
         self._busy = False
+        self._spinner.stop()
+        self._spinner.pack_forget()
         self._start.configure(state="normal", text="Run Analysis" if self._mode == "analyze"
                               else f"Start {MODE_NAME[self._mode]}")
         for b in self._btns.values():
@@ -549,16 +852,13 @@ class App(ctk.CTk):
         tc.console.print(f"{len(data)} locations · {tc.fmt_size(total)} reclaimable")
         tc.console.print()
         rows = sorted(data.items(), key=lambda x: -x[1])
-        for g in ("core", "browser", "caches", "apps", "dev", "system", "extended"):
+        for g in ("core", "browser", "caches", "apps", "dev", "games", "system", "extended"):
             items = [(l, s) for l, s in rows if groups.get(l, "other") == g]
             if not items:
                 continue
             tc.console.print(tc.GROUP_LABELS.get(g, g).upper())
             for label, size in items:
-                lab = label if len(label) <= 26 else label[:25] + "…"
-                filled = max(1, round(26 * size / total))
-                bar = "█" * filled + "·" * (26 - filled)
-                tc.console.print(f"  {lab:<26}{tc.fmt_size(size):>10}  {bar}  {100 * size / total:4.1f}%")
+                tc.console.print(_bar_row(label, size, total))
             tc.console.print()
 
     # ------------------------------------------------------------ updates
@@ -836,6 +1136,137 @@ class App(ctk.CTk):
                           command=lambda: os.startfile(tc.REPORTS_DIR)).pack(fill="x", pady=(8, 0))
         except Exception:
             pass
+
+    def _open_installers(self):
+        """Read-only review of old installers in Downloads. Nothing here is
+        ever deleted in bulk — each row has its own Delete button, and each
+        delete asks to confirm first. This is deliberately manual: an
+        installer sitting in Downloads might still be wanted."""
+        win = ctk.CTkToplevel(self, fg_color=BG)
+        win.title("Old Installers")
+        win.geometry("560x460")
+        win.transient(self)
+
+        header = ctk.CTkFrame(win, fg_color="transparent")
+        header.pack(fill="x", padx=20, pady=(18, 6))
+        ctk.CTkLabel(header, text="Old Installers in Downloads",
+                    font=("Segoe UI Semibold", 15), text_color=TEXT).pack(anchor="w")
+        ctk.CTkLabel(header, text="Informational only — review and delete one at a time. "
+                                  "Older than 30 days.",
+                    font=("Segoe UI", 11), text_color=MUTED, wraplength=500,
+                    justify="left").pack(anchor="w", pady=(2, 0))
+
+        body = ctk.CTkScrollableFrame(win, fg_color=SURFACE, corner_radius=12)
+        body.pack(fill="both", expand=True, padx=20, pady=(10, 20))
+
+        def refresh():
+            for w in body.winfo_children():
+                w.destroy()
+            items = tc.find_old_installers(30)
+            if not items:
+                ctk.CTkLabel(body, text="No installers older than 30 days found — clean.",
+                            font=("Segoe UI", 12), text_color=MUTED).pack(padx=16, pady=16)
+                return
+            for it in items:
+                row = ctk.CTkFrame(body, fg_color=SURFACE2, corner_radius=8)
+                row.pack(fill="x", pady=3, padx=2)
+                info = ctk.CTkFrame(row, fg_color="transparent")
+                info.pack(side="left", fill="x", expand=True, padx=(12, 6), pady=8)
+                ctk.CTkLabel(info, text=it["name"], font=("Segoe UI", 12),
+                            text_color=TEXT, anchor="w").pack(fill="x")
+                ctk.CTkLabel(info, text=f"{tc.fmt_size(it['size'])} · {it['age_days']}d old",
+                            font=("Segoe UI", 10), text_color=MUTED, anchor="w").pack(fill="x")
+
+                def do_delete(path=it["path"], name=it["name"], size=it["size"]):
+                    if self._ask("Delete Installer",
+                                 f"Delete {name} ({tc.fmt_size(size)})?\n\n"
+                                 "This is permanent unless Recycle Bin mode is on.",
+                                 ok="Delete", danger=True):
+                        tc.delete_file(path, name)
+                        refresh()
+
+                ctk.CTkButton(row, text="Delete", width=72, height=28, corner_radius=6,
+                             fg_color=RED, hover_color=RED_DK, text_color=ON_ACCENT,
+                             font=("Segoe UI", 11), command=do_delete
+                             ).pack(side="right", padx=(6, 12), pady=8)
+
+        refresh()
+
+    def _open_exclusions(self):
+        """Manage protected paths — anything listed here is skipped by every
+        clean mode, unconditionally, regardless of age limit or mode."""
+        win = ctk.CTkToplevel(self, fg_color=BG)
+        win.title("Protected Paths")
+        win.geometry("560x460")
+        win.transient(self)
+
+        header = ctk.CTkFrame(win, fg_color="transparent")
+        header.pack(fill="x", padx=20, pady=(18, 6))
+        ctk.CTkLabel(header, text="Protected Paths",
+                    font=("Segoe UI Semibold", 15), text_color=TEXT).pack(anchor="w")
+        ctk.CTkLabel(header, text="Never touched by any clean mode — checked before every "
+                                  "single deletion.",
+                    font=("Segoe UI", 11), text_color=MUTED, wraplength=500,
+                    justify="left").pack(anchor="w", pady=(2, 0))
+
+        body = ctk.CTkScrollableFrame(win, fg_color=SURFACE, corner_radius=12)
+        body.pack(fill="both", expand=True, padx=20, pady=(10, 10))
+
+        def refresh():
+            for w in body.winfo_children():
+                w.destroy()
+            if not tc.settings.excluded_paths:
+                ctk.CTkLabel(body, text="No protected paths yet.",
+                            font=("Segoe UI", 12), text_color=MUTED).pack(padx=16, pady=16)
+                return
+            for p in list(tc.settings.excluded_paths):
+                row = ctk.CTkFrame(body, fg_color=SURFACE2, corner_radius=8)
+                row.pack(fill="x", pady=3, padx=2)
+                ctk.CTkLabel(row, text=p, font=("Segoe UI", 11), text_color=TEXT,
+                            anchor="w", wraplength=380, justify="left"
+                            ).pack(side="left", fill="x", expand=True, padx=(12, 6), pady=8)
+
+                def do_remove(path=p):
+                    tc.settings.excluded_paths = [
+                        x for x in tc.settings.excluded_paths if tc._norm(x) != tc._norm(path)
+                    ]
+                    tc.save_settings(tc.settings)
+                    refresh()
+
+                ctk.CTkButton(row, text="Remove", width=76, height=28, corner_radius=6,
+                             fg_color="transparent", hover_color=BORDER, text_color=MUTED,
+                             font=("Segoe UI", 11), command=do_remove
+                             ).pack(side="right", padx=(6, 12), pady=8)
+
+        def add_folder():
+            p = filedialog.askdirectory(title="Choose a folder to protect", parent=win)
+            if p:
+                _add_path(p)
+
+        def add_file():
+            p = filedialog.askopenfilename(title="Choose a file to protect", parent=win)
+            if p:
+                _add_path(p)
+
+        def _add_path(p):
+            existing = [tc._norm(x) for x in tc.settings.excluded_paths]
+            if tc._norm(p) not in existing:
+                tc.settings.excluded_paths.append(os.path.abspath(p))
+                tc.save_settings(tc.settings)
+                refresh()
+
+        btn_row = ctk.CTkFrame(win, fg_color="transparent")
+        btn_row.pack(fill="x", padx=20, pady=(0, 20))
+        ctk.CTkButton(btn_row, text="+ Add Folder", height=32, corner_radius=8,
+                     fg_color=SURFACE2, hover_color=BORDER, text_color=TEXT,
+                     font=("Segoe UI", 12), command=add_folder
+                     ).pack(side="left", fill="x", expand=True, padx=(0, 6))
+        ctk.CTkButton(btn_row, text="+ Add File", height=32, corner_radius=8,
+                     fg_color=SURFACE2, hover_color=BORDER, text_color=TEXT,
+                     font=("Segoe UI", 12), command=add_file
+                     ).pack(side="left", fill="x", expand=True, padx=(6, 0))
+
+        refresh()
 
 
 def main():

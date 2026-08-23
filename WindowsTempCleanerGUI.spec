@@ -6,6 +6,8 @@ binaries = []
 hiddenimports = []
 tmp_ret = collect_all('customtkinter')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret = collect_all('ctkfontawesome')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 
 a = Analysis(
@@ -17,7 +19,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['PyQt5', 'PyQt6', 'PySide2', 'PySide6', 'numpy', 'pandas', 'scipy', 'matplotlib', 'PIL', 'IPython', 'jedi', 'parso', 'jupyter', 'notebook', 'pythonnet', 'clr'],
+    excludes=['PyQt5', 'PyQt6', 'PySide2', 'PySide6', 'numpy', 'pandas', 'scipy', 'matplotlib', 'IPython', 'jedi', 'parso', 'jupyter', 'notebook', 'pythonnet', 'clr'],
     noarchive=False,
     optimize=0,
 )

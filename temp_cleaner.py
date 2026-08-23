@@ -24,7 +24,9 @@ import json
 import time
 import glob
 import ctypes
+import ctypes.wintypes
 import shutil
+import stat
 import fnmatch
 import subprocess
 import traceback
@@ -39,7 +41,7 @@ from rich.table import Table
 from rich import box
 from rich.prompt import Prompt, Confirm
 
-APP_VERSION = "3.1"
+APP_VERSION = "3.2"
 
 console = Console()
 ERROR_LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cleaner_error.log")
@@ -70,9 +72,10 @@ FIREFOX_PROFILES = os.path.join(LOCAL, r"Mozilla\Firefox\Profiles")
 
 @dataclass
 class Settings:
-    age_days: int = 1          # 0 = off, else delete only items older than this
+    age_days: int = 0          # 0 = off, else delete only items older than this
     use_recycle_bin: bool = False
     save_reports: bool = True
+    excluded_paths: list = field(default_factory=list)   # never touched, no matter the mode
 
 
 def load_settings() -> Settings:
@@ -81,9 +84,11 @@ def load_settings() -> Settings:
         cp = configparser.ConfigParser()
         if cp.read(CONFIG_PATH) and "cleaner" in cp:
             sec = cp["cleaner"]
-            s.age_days = sec.getint("age_days", fallback=1)
+            s.age_days = sec.getint("age_days", fallback=0)
             s.use_recycle_bin = sec.getboolean("use_recycle_bin", fallback=False)
             s.save_reports = sec.getboolean("save_reports", fallback=True)
+            raw = sec.get("excluded_paths", fallback="")
+            s.excluded_paths = [p for p in raw.split(";;") if p]
     except Exception:
         pass
     return s
@@ -96,6 +101,7 @@ def save_settings(s: Settings):
             "age_days": str(s.age_days),
             "use_recycle_bin": str(s.use_recycle_bin),
             "save_reports": str(s.save_reports),
+            "excluded_paths": ";;".join(s.excluded_paths),
         }
         with open(CONFIG_PATH, "w") as f:
             cp.write(f)
@@ -171,6 +177,30 @@ def calc_size(path: str) -> int:
         except Exception:
             continue
     return total
+
+
+def _norm(p: str) -> str:
+    return os.path.normcase(os.path.normpath(os.path.abspath(p)))
+
+
+def is_excluded(path: str) -> bool:
+    """True if `path` is (or is inside) a user-protected exclusion path.
+    Checked before every single deletion — regardless of mode, age limit,
+    or Recycle Bin setting, an excluded path is never touched."""
+    if not settings.excluded_paths or not path:
+        return False
+    try:
+        norm = _norm(path)
+    except Exception:
+        return False
+    for ex in settings.excluded_paths:
+        try:
+            ex_norm = _norm(ex)
+        except Exception:
+            continue
+        if norm == ex_norm or norm.startswith(ex_norm + os.sep):
+            return True
+    return False
 
 
 def run_quiet(args):
@@ -271,15 +301,45 @@ def _recycle_batch(paths):
     flush()
 
 
+def _force_writable(path: str):
+    """Clear the Windows read-only file attribute (os.chmod maps
+    stat.S_IWRITE to FILE_ATTRIBUTE_READONLY on Windows). This is the
+    standard fix for caches that mark their own files read-only —
+    Go's module download cache does this for every file it stores."""
+    try:
+        os.chmod(path, stat.S_IWRITE)
+    except Exception:
+        pass
+
+
+def _rmtree_onerror(func, path, exc_info):
+    """shutil.rmtree onerror hook: clear read-only, retry once, else give up
+    quietly — the caller checks os.path.exists() afterwards regardless, so
+    a failed retry here is correctly reported as skipped/locked, not crashed."""
+    _force_writable(path)
+    try:
+        func(path)
+    except Exception:
+        pass
+
+
 def _remove_path(p: str, is_dir: bool, recycle: bool) -> bool:
-    """Delete (or recycle) a single file/dir. Returns True on success."""
+    """Delete (or recycle) a single file/dir. Returns True on success.
+    Never called on an excluded path — callers filter before reaching here,
+    but this is deliberately dumb/unconditional: the exclusion check lives
+    once, at the call sites, so it can't be silently bypassed by a new
+    caller forgetting to check."""
     if recycle:
         _recycle_batch([p])
         return not os.path.lexists(p)
     try:
         if is_dir:
-            shutil.rmtree(ext(p))
-        else:
+            shutil.rmtree(ext(p), onerror=_rmtree_onerror)
+            return not os.path.exists(ext(p))
+        try:
+            os.remove(ext(p))
+        except PermissionError:
+            _force_writable(ext(p))
             os.remove(ext(p))
         return True
     except (PermissionError, OSError):
@@ -336,6 +396,8 @@ def clear_folder(path: str, label: str, min_age=None, quiet: bool = False,
 
     for entry in entries:
         try:
+            if is_excluded(entry.path):
+                continue
             if not _older_than(entry, min_age):
                 s.skipped_new += 1
                 continue
@@ -372,6 +434,8 @@ def clear_matching(folder: str, pattern: str, label: str, min_age: int = 0,
         try:
             if not fnmatch.fnmatch(entry.name.lower(), pattern.lower()):
                 continue
+            if is_excluded(entry.path):
+                continue
             if not _older_than(entry, min_age):
                 s.skipped_new += 1
                 continue
@@ -392,7 +456,7 @@ def clear_matching(folder: str, pattern: str, label: str, min_age: int = 0,
 
 def delete_file(path: str, label: str) -> CleanStats:
     s = CleanStats()
-    if path and os.path.isfile(path):
+    if path and os.path.isfile(path) and not is_excluded(path):
         if _remove_path(path, False, settings.use_recycle_bin):
             s.deleted = 1
             s.bytes_freed = os.path.getsize(path)
@@ -442,34 +506,55 @@ def _cache_tile_items():
         ("NVIDIA DX Cache", os.path.join(LOCAL, r"NVIDIA\DXCache"), "caches"),
         ("NVIDIA GL Cache", os.path.join(LOCAL, r"NVIDIA\GLCache"), "caches"),
         ("Font Cache", os.path.join(LOCAL, r"Microsoft\Windows\Fonts"), "caches"),
+        ("RDP Bitmap Cache", os.path.join(LOCAL, r"Microsoft\Terminal Server Client\Cache"), "caches"),
     ]
+
+
+# Every Electron app (Discord, Slack, Teams, VSCode, Cursor, ...) uses the
+# same Chromium-derived cache layout under its data folder. One shared list
+# means adding a new cache kind (e.g. DawnCache) benefits every app at once
+# instead of needing per-app edits.
+ELECTRON_CACHE_SUBDIRS = (
+    "Cache", "Code Cache", "GPUCache", "DawnCache",
+    os.path.join("Service Worker", "CacheStorage"),
+)
+
+
+def _electron_cache_items(display: str, base: str):
+    return [(f"{display} {os.path.basename(sub)}", os.path.join(base, sub), "apps")
+            for sub in ELECTRON_CACHE_SUBDIRS]
 
 
 def _app_cache_items():
     items = []
-    disc = os.path.join(APPDATA, "discord")
-    for sub in ("Cache", "Code Cache", "GPUCache"):
-        items.append((f"Discord {sub}", os.path.join(disc, sub), "apps"))
-    slack = os.path.join(APPDATA, "slack")
-    for sub in ("Cache", "Code Cache", "GPUCache"):
-        items.append((f"Slack {sub}", os.path.join(slack, sub), "apps"))
-    teams = os.path.join(APPDATA, "Microsoft", "Teams")
-    for sub in ("Cache", "Code Cache", "GPUCache"):
-        items.append((f"Teams {sub}", os.path.join(teams, sub), "apps"))
+    items += _electron_cache_items("Discord", os.path.join(APPDATA, "discord"))
+    items += _electron_cache_items("Slack", os.path.join(APPDATA, "slack"))
+    items += _electron_cache_items("Teams", os.path.join(APPDATA, "Microsoft", "Teams"))
     for base in glob.glob(os.path.join(LOCAL, "Packages", "MicrosoftTeams_*",
                                        "LocalCache", "Microsoft", "Teams", "*")):
         name = os.path.basename(base)
-        if name in ("Cache", "Code Cache", "GPUCache", "blob_storage"):
+        if name in ("Cache", "Code Cache", "GPUCache", "DawnCache", "blob_storage"):
             items.append((f"Teams (new) {name}", base, "apps"))
     items.append(("Spotify Data", os.path.join(LOCAL, "Spotify", "Data"), "apps"))
     vsc = os.path.join(APPDATA, "Code")
-    for sub in ("Cache", "CachedData", "Code Cache", "GPUCache"):
-        items.append((f"VSCode {sub}", os.path.join(vsc, sub), "apps"))
+    items += _electron_cache_items("VSCode", vsc)
+    items.append(("VSCode CachedData", os.path.join(vsc, "CachedData"), "apps"))
     cur = os.path.join(APPDATA, "Cursor")
-    for sub in ("Cache", "CachedData", "Code Cache", "GPUCache"):
-        items.append((f"Cursor {sub}", os.path.join(cur, sub), "apps"))
+    items += _electron_cache_items("Cursor", cur)
+    items.append(("Cursor CachedData", os.path.join(cur, "CachedData"), "apps"))
     items.append(("Zoom Logs", os.path.join(APPDATA, "Zoom", "logs"), "apps"))
     return items
+
+
+def _go_mod_cache_download_dir():
+    """~/go/pkg/mod/cache/download by default, GOPATH-aware. Deliberately
+    scoped to just the download/ subfolder (the re-downloadable HTTP cache
+    of module zips), NOT all of pkg/mod — that also holds extracted module
+    source that other projects reference directly; wiping it forces a full
+    re-resolve of every dependency in every project, which is a much bigger
+    action than clearing a cache and shouldn't happen from a cache cleaner."""
+    gopath = os.environ.get("GOPATH") or os.path.join(USERPROFILE, "go")
+    return os.path.join(gopath, "pkg", "mod", "cache", "download")
 
 
 def _dev_cache_items():
@@ -482,17 +567,74 @@ def _dev_cache_items():
         ("NuGet http", os.path.join(LOCAL, "NuGet", "http-cache"), "dev"),
         ("Gradle Caches", os.path.join(home, ".gradle", "caches"), "dev"),
         ("Go Build", os.path.join(LOCAL, "go-build"), "dev"),
+        ("Go Module Download Cache", _go_mod_cache_download_dir(), "dev"),
+        ("Cargo Registry Cache", os.path.join(home, ".cargo", "registry", "cache"), "dev"),
     ]
 
 
+def _uwp_temp_items():
+    """Per-package sandboxed temp folders for installed Store/UWP apps —
+    each app gets its own AC\\Temp, and nothing ever cleans these up
+    automatically. Safe: it's the same kind of scratch space as User Temp,
+    just sandboxed per-package instead of shared."""
+    items = []
+    for t in glob.glob(os.path.join(LOCAL, "Packages", "*", "AC", "Temp")):
+        pkg_name = os.path.basename(os.path.dirname(os.path.dirname(t)))
+        items.append((f"UWP Temp: {pkg_name}", t, "system"))
+    return items
+
+
+def _chkdsk_recovery_items():
+    """Orphaned FOUND.NNN / *.CHK folders CHKDSK leaves at drive roots after
+    recovering lost clusters. Zero risk — these are already-disconnected
+    fragments nothing references; almost nobody knows to clear them."""
+    items = []
+    try:
+        bitmask = ctypes.windll.kernel32.GetLogicalDrives()
+    except Exception:
+        bitmask = 0
+    for i in range(26):
+        if not (bitmask & (1 << i)):
+            continue
+        drive = f"{chr(65 + i)}:\\"
+        for d in glob.glob(os.path.join(drive, "FOUND.*")):
+            if os.path.isdir(d):
+                items.append((f"CHKDSK Recovery ({os.path.basename(d)} on {drive[:2]})", d, "system"))
+    return items
+
+
 def _system_items():
-    return [
+    items = [
         ("Setup Logs", r"C:\Windows\Panther", "system"),
         ("Servicing Logs", r"C:\Windows\Logs\CBS", "system"),
         ("Minidumps", r"C:\Windows\Minidump", "system"),
         ("Error Reporting", r"C:\ProgramData\Microsoft\Windows\WER", "system"),
+        ("Error Reporting (user)", os.path.join(LOCAL, r"Microsoft\Windows\WER"), "system"),
         ("Crash Dumps", os.path.join(LOCAL, "CrashDumps"), "system"),
     ]
+    items += _uwp_temp_items()
+    items += _chkdsk_recovery_items()
+    return items
+
+
+def _steam_install_dirs():
+    return [d for d in (r"C:\Program Files (x86)\Steam", r"C:\Program Files\Steam")
+            if os.path.isdir(d)]
+
+
+def _game_cache_items():
+    """Steam CLIENT caches — its own UI/browser cache, crash dumps, and web
+    view cache. These are a different, lower-risk thing than per-game shader
+    caches (which stay in Extended Clean): deleting them doesn't cause any
+    in-game recompile stutter, they're just Steam's own regenerable cache,
+    same risk tier as a browser cache."""
+    items = []
+    for steam in _steam_install_dirs():
+        for sub, label in (("appcache", "Steam App Cache"),
+                           ("dumps", "Steam Crash Dumps"),
+                           ("htmlcache", "Steam Web Cache")):
+            items.append((label, os.path.join(steam, sub), "games"))
+    return items
 
 
 def _extended_items():
@@ -524,6 +666,9 @@ def _all_scan_items():
     items.append(("IconCache.db", os.path.join(LOCAL, "IconCache.db"), "caches"))
     items += _app_cache_items()
     items += _dev_cache_items()
+    items += _game_cache_items()
+    items.append(("Legacy WebCache", os.path.join(LOCAL, r"Microsoft\Windows\WebCache",
+                                                   "WebCacheV01.dat"), "caches"))
     items += [
         ("WU Download", r"C:\Windows\SoftwareDistribution\Download", "system"),
         ("Delivery Opt.", r"C:\Windows\SoftwareDistribution\DeliveryOptimization", "system"),
@@ -541,6 +686,7 @@ GROUP_LABELS = {
     "caches": "Caches (GPU / Tiles / Icons)",
     "apps": "Apps",
     "dev": "Developer",
+    "games": "Games & Launchers",
     "system": "Windows System",
     "extended": "Extended (caution)",
 }
@@ -589,6 +735,8 @@ def clear_shaders_thumbnails() -> CleanStats:
         "iconcache_*.db", "Icon Cache",
     )
     total += delete_file(os.path.join(LOCAL, "IconCache.db"), "IconCache.db")
+    total += delete_file(os.path.join(LOCAL, r"Microsoft\Windows\WebCache", "WebCacheV01.dat"),
+                         "Legacy WebCache (IE / old Edge)")
     return total
 
 
@@ -613,7 +761,9 @@ def clear_windows_files() -> CleanStats:
     total += delete_file(r"C:\Windows\MEMORY.DMP", "MEMORY.DMP")
 
     win_old = r"C:\Windows.old"
-    if os.path.isdir(win_old):
+    if os.path.isdir(win_old) and is_excluded(win_old):
+        console.print("  [Windows.old]  [dim]protected by exclusion list, skipped[/dim]")
+    elif os.path.isdir(win_old):
         console.print(f"\n  [bold yellow]! Windows.old detected[/bold yellow] (can't roll back after deletion)")
         if Confirm.ask("  Delete Windows.old?", default=False):
             with console.status("[yellow]Removing Windows.old...[/yellow]", spinner="dots"):
@@ -621,7 +771,9 @@ def clear_windows_files() -> CleanStats:
                 run_quiet(["icacls", win_old, "/grant", "Administrators:F", "/t"])
                 try:
                     sz = calc_size(win_old)
-                    shutil.rmtree(ext(win_old))
+                    shutil.rmtree(ext(win_old), onerror=_rmtree_onerror)
+                    if os.path.exists(ext(win_old)):
+                        raise OSError("could not be fully removed")
                     total.deleted += 1
                     total.bytes_freed += sz
                     console.print(f"  [Windows.old]  [green]OK[/green] deleted [bold]{fmt_size(sz)}[/bold]")
@@ -661,6 +813,137 @@ def clear_dev_caches() -> CleanStats:
     return total
 
 
+def clear_game_caches() -> CleanStats:
+    total = CleanStats()
+    console.print(f"\n[bold cyan]== Games & Launchers ==[/bold cyan]")
+    found = 0
+    for label, path, _g in _game_cache_items():
+        s = clear_folder(path, label, quiet=True, concise=True)
+        if s.deleted or s.skipped or s.skipped_new:
+            found += 1
+        total += s
+    if found == 0:
+        console.print("  [dim]No game launcher caches found.[/dim]")
+    return total
+
+
+def clear_system_maintenance() -> CleanStats:
+    """
+    Runs the official, Microsoft-sanctioned WinSxS component cleanup:
+    `dism.exe /Online /Cleanup-Image /StartComponentCleanup`.
+
+    This only removes component versions Windows Servicing has already
+    marked superseded and safe to discard — it never touches active files
+    directly (no manual deletion happens here at all, DISM owns the whole
+    operation), and deliberately does NOT pass /ResetBase, so the ability
+    to uninstall recently installed updates is preserved.
+
+    Space freed is measured via a free-disk-space delta rather than scanning
+    C:\\Windows\\WinSxS directly — that folder can be tens of GB and slow to
+    walk, and the delta is what the user actually cares about anyway.
+    """
+    total = CleanStats()
+    console.print()
+    console.print(Panel(
+        "[bold yellow]! System Maintenance — WinSxS Component Cleanup[/bold yellow]\n\n"
+        "  Runs the official Windows servicing cleanup (DISM). Only removes\n"
+        "  component versions Windows has already marked safe to discard.\n"
+        "  Does NOT use /ResetBase, so recently installed updates stay\n"
+        "  uninstallable.\n\n"
+        "[dim]Requires administrator rights. Can take several minutes.\n"
+        "Safe, but not something you need to run every day.[/dim]",
+        box=box.ASCII, style="bold",
+    ))
+    console.print()
+    if not Confirm.ask("[bold yellow]Run WinSxS component cleanup now?[/bold yellow]", default=False):
+        console.print("  [dim]System Maintenance cancelled.[/dim]")
+        return total
+
+    if not is_admin():
+        console.print("  [System Maintenance]  [yellow]![/yellow] requires administrator rights, skipped")
+        total.skipped = 1
+        _track("System Maintenance (WinSxS)", total)
+        return total
+
+    drive = os.environ.get("SystemDrive", "C:") + "\\"
+    try:
+        before = shutil.disk_usage(drive).free
+    except Exception:
+        before = None
+
+    console.print("  [dim]Running DISM component cleanup — this can take several minutes...[/dim]")
+    ok = False
+    try:
+        proc = subprocess.run(
+            ["dism.exe", "/Online", "/Cleanup-Image", "/StartComponentCleanup"],
+            capture_output=True, shell=False, timeout=1800,
+        )
+        ok = proc.returncode == 0
+    except Exception as exc:
+        console.print(f"  [System Maintenance]  [red]failed[/red] {exc}")
+
+    if ok:
+        try:
+            after = shutil.disk_usage(drive).free
+        except Exception:
+            after = before
+        freed = max(0, (after or 0) - (before or 0)) if before is not None else 0
+        total.deleted = 1
+        total.bytes_freed = freed
+        _track("System Maintenance (WinSxS)", total)
+        console.print(f"  [System Maintenance]  [green]OK[/green] freed "
+                      f"[bold]{fmt_size(freed)}[/bold] (approx., by free-space delta)")
+    else:
+        total.skipped = 1
+        _track("System Maintenance (WinSxS)", total)
+        console.print("  [System Maintenance]  [yellow]![/yellow] DISM did not complete successfully")
+    return total
+
+
+# ---------------------------------------------------------------------------
+# installers report (read-only — never deletes automatically)
+# ---------------------------------------------------------------------------
+
+INSTALLER_EXTS = (".exe", ".msi")
+
+
+def find_old_installers(days: int = 30):
+    """
+    Installer-looking files sitting in Downloads older than `days`. Purely
+    informational — this never deletes anything itself. Individual items
+    are only ever removed one at a time, by explicit user action, through
+    show_installers_menu() (CLI) or the Installers dialog (GUI).
+    """
+    out = []
+    downloads = os.path.join(USERPROFILE, "Downloads") if USERPROFILE else ""
+    if not downloads or not os.path.isdir(downloads):
+        return out
+    cutoff = time.time() - days * 86400
+    try:
+        with os.scandir(downloads) as it:
+            for entry in it:
+                try:
+                    if not entry.is_file():
+                        continue
+                    if not entry.name.lower().endswith(INSTALLER_EXTS):
+                        continue
+                    st = entry.stat()
+                    if st.st_mtime > cutoff:
+                        continue
+                    out.append({
+                        "name": entry.name,
+                        "path": entry.path,
+                        "size": st.st_size,
+                        "age_days": int((time.time() - st.st_mtime) / 86400),
+                    })
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    out.sort(key=lambda d: -d["size"])
+    return out
+
+
 JUNK_PATTERNS = ("*.tmp", "~$*", "*.bak", "*-001.*")
 JUNK_SKIP_DIRS = {
     "AppData", "Windows", "Program Files", "Program Files (x86)", ".git",
@@ -679,11 +962,14 @@ def junk_sweep() -> CleanStats:
     with console.status("[yellow]Sweeping profile for junk files...[/yellow]", spinner="dots"):
         for root, dirs, files in os.walk(USERPROFILE):
             dirs[:] = [d for d in dirs
-                       if d not in JUNK_SKIP_DIRS and not d.startswith(".")]
+                       if d not in JUNK_SKIP_DIRS and not d.startswith(".")
+                       and not is_excluded(os.path.join(root, d))]
             for name in files:
                 if not any(fnmatch.fnmatch(name.lower(), p) for p in JUNK_PATTERNS):
                     continue
                 path = os.path.join(root, name)
+                if is_excluded(path):
+                    continue
                 try:
                     if age > 0 and (time.time() - os.path.getmtime(path)) < age:
                         s.skipped_new += 1
@@ -921,6 +1207,47 @@ def show_reports_menu():
 # options
 # ---------------------------------------------------------------------------
 
+def _manage_exclusions():
+    while True:
+        clear_screen()
+        console.print(Panel("[bold]Protected Paths[/bold]\n"
+                            "[dim]Never touched by any clean mode, regardless of age limit.[/dim]",
+                            box=box.ASCII, style="bold white"))
+        if not settings.excluded_paths:
+            console.print("  [dim]No protected paths yet.[/dim]")
+        for i, p in enumerate(settings.excluded_paths, 1):
+            console.print(f"  {i:>2}  {p}")
+        console.print()
+        console.print("   A  Add a path")
+        console.print("   R  Remove a path")
+        console.print("   B  Back")
+        console.print()
+        c = Prompt.ask("[bold]Option[/bold]").strip().lower()
+        if c == "b":
+            save_settings(settings)
+            return
+        if c == "a":
+            p = Prompt.ask("  Path to protect").strip().strip('"')
+            if p and os.path.exists(p):
+                existing = [_norm(x) for x in settings.excluded_paths]
+                if _norm(p) not in existing:
+                    settings.excluded_paths.append(os.path.abspath(p))
+                    console.print("[green]Added.[/green]")
+                else:
+                    console.print("[yellow]Already protected.[/yellow]")
+            else:
+                console.print("[red]Path does not exist.[/red]")
+            press_enter("continue")
+        elif c == "r":
+            if not settings.excluded_paths:
+                continue
+            v = Prompt.ask("  Number to remove").strip()
+            if v.isdigit() and 1 <= int(v) <= len(settings.excluded_paths):
+                removed = settings.excluded_paths.pop(int(v) - 1)
+                console.print(f"[green]Removed:[/green] {removed}")
+            press_enter("continue")
+
+
 def show_options_menu():
     while True:
         clear_screen()
@@ -929,6 +1256,7 @@ def show_options_menu():
         console.print(f"   1  Age limit ......... {age_str}   (only delete files older than this)")
         console.print(f"   2  Recycle Bin ....... [cyan]{'On' if settings.use_recycle_bin else 'Off'}[/cyan]   (undoable deletions)")
         console.print(f"   3  Auto-report ....... [cyan]{'On' if settings.save_reports else 'Off'}[/cyan]   (save CSV/JSON after each clean)")
+        console.print(f"   4  Exclusions ....... [cyan]{len(settings.excluded_paths)}[/cyan] protected path(s)")
         console.print("   B  Back (settings saved)")
         console.print()
         c = Prompt.ask("[bold]Option[/bold]").strip().lower()
@@ -955,9 +1283,42 @@ def show_options_menu():
         elif c == "3":
             settings.save_reports = not settings.save_reports
             console.print(f"[green]Auto-report {'On' if settings.save_reports else 'Off'}.[/green]")
+        elif c == "4":
+            _manage_exclusions()
+            continue
         else:
             console.print("[red]Invalid choice.[/red]")
         press_enter("continue")
+
+
+def show_installers_menu():
+    items = find_old_installers(30)
+    clear_screen()
+    console.print(Panel("[bold]Old Installers in Downloads[/bold]\n"
+                        "[dim]Informational only — nothing is deleted automatically. "
+                        "Older than 30 days.[/dim]",
+                        box=box.ASCII, style="bold white"))
+    if not items:
+        console.print("[dim]No installers older than 30 days found.[/dim]")
+        press_enter("continue")
+        return
+    for i, it in enumerate(items, 1):
+        console.print(f"  {i:>2}  {it['name']:<42} {fmt_size(it['size']):>10}   {it['age_days']}d old")
+    console.print()
+    console.print("   #  Delete that installer (asks to confirm first)")
+    console.print("   B  Back")
+    console.print()
+    while True:
+        c = Prompt.ask("[bold]Option[/bold]").strip().lower()
+        if c == "b":
+            return
+        if c.isdigit() and 1 <= int(c) <= len(items):
+            it = items[int(c) - 1]
+            if Confirm.ask(f"  Delete [bold]{it['name']}[/bold] ({fmt_size(it['size'])})?", default=False):
+                delete_file(it["path"], it["name"])
+            press_enter("continue")
+            return
+        console.print("[red]Invalid choice.[/red]")
 
 
 # ---------------------------------------------------------------------------
@@ -987,10 +1348,13 @@ def show_menu() -> str:
         (" 3", "Shaders & Tiles    - GPU, thumbnail, icon & font caches", "SAFE"),
         (" 4", "Windows Files      - Logs, dumps, update cache", "SAFE"),
         (" 5", "App Caches         - Discord, Teams, Spotify, Slack, VSCode", "SAFE"),
-        (" 6", "Dev Caches         - npm, pip, NuGet, Gradle, Go", "SAFE"),
+        (" 6", "Dev Caches         - npm, pip, NuGet, Gradle, Go, Cargo", "SAFE"),
         (" 7", "Extended Clean     - Game shaders, debug logs, junk sweep", "CAUTION"),
+        (" G", "Games & Launchers  - Steam client cache, crash dumps", "SAFE"),
         (" 8", "Analyze Space      - Scan only, detailed report", "SAFE"),
-        (" 9", "Options            - Age limit, Recycle Bin, reports", ""),
+        (" M", "System Maintenance - WinSxS component cleanup (DISM)", "CAUTION"),
+        (" I", "Installers         - Old installers in Downloads (review)", ""),
+        (" 9", "Options            - Age limit, Recycle Bin, exclusions", ""),
         (" R", "Reports            - View past cleanup reports", ""),
         ("", "", ""),
         (" Q", "[bold red]Quit[/bold red]", ""),
@@ -1009,9 +1373,9 @@ def show_menu() -> str:
 
     while True:
         choice = Prompt.ask("[bold]Choice[/bold]").strip().lower()
-        if choice in ("1", "2", "3", "4", "5", "6", "7", "8", "9", "r", "q"):
+        if choice in ("1", "2", "3", "4", "5", "6", "7", "8", "9", "g", "m", "i", "r", "q"):
             return choice
-        console.print("[red]Invalid choice. Enter 1-9, R or Q.[/red]")
+        console.print("[red]Invalid choice. Enter 1-9, G, M, I, R or Q.[/red]")
 
 
 MODES = {
@@ -1022,6 +1386,8 @@ MODES = {
     "5": "App Caches",
     "6": "Dev Caches",
     "7": "Extended Clean",
+    "g": "Games & Launchers",
+    "m": "System Maintenance",
 }
 
 
@@ -1062,6 +1428,10 @@ def main():
                 show_reports_menu()
                 continue
 
+            if choice == "i":
+                show_installers_menu()
+                continue
+
             stats.reset()
             RUN_DETAIL.clear()
             mode = MODES.get(choice, choice)
@@ -1083,6 +1453,7 @@ def main():
                     stats += clear_windows_files()
                     stats += clear_app_caches()
                     stats += clear_dev_caches()
+                    stats += clear_game_caches()
                 elif choice == "3":
                     stats += clear_shaders_thumbnails()
                 elif choice == "4":
@@ -1093,6 +1464,10 @@ def main():
                     stats += clear_dev_caches()
                 elif choice == "7":
                     stats += clear_extended()
+                elif choice == "g":
+                    stats += clear_game_caches()
+                elif choice == "m":
+                    stats += clear_system_maintenance()
             except Exception as exc:
                 console.print(f"\n[bold red]Error during cleaning:[/bold red] {exc}")
                 traceback.print_exc()
