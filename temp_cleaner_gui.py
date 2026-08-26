@@ -1086,7 +1086,7 @@ class App(ctk.CTk):
     def _open_reports(self):
         win = ctk.CTkToplevel(self, fg_color=BG)
         win.title("Cleanup Reports")
-        win.geometry("740x480")
+        win.geometry("780x520")
         win.transient(self)
         win.grid_columnconfigure(1, weight=1)
         win.grid_rowconfigure(0, weight=1)
@@ -1094,22 +1094,83 @@ class App(ctk.CTk):
         left = ctk.CTkScrollableFrame(win, width=260, fg_color=SURFACE, corner_radius=12)
         left.grid(row=0, column=0, sticky="nsw", padx=(16, 8), pady=16)
 
-        box = ctk.CTkTextbox(win, font=("Consolas", 11), fg_color=SURFACE, text_color=TEXT,
-                             corner_radius=12, border_width=1, border_color=BORDER,
-                             wrap="none")
-        box.grid(row=0, column=1, sticky="nsew", padx=(0, 16), pady=16)
-        box.configure(state="disabled")
+        detail = ctk.CTkScrollableFrame(win, fg_color=SURFACE, corner_radius=12)
+        detail.grid(row=0, column=1, sticky="nsew", padx=(0, 16), pady=16)
+
+        COLS = ("Category", "Deleted", "Locked", "Too new", "Freed")
+        COL_WEIGHTS = (2, 1, 1, 1, 1)
 
         def show(path):
+            for w in detail.winfo_children():
+                w.destroy()
             try:
                 with open(path, encoding="utf-8-sig") as f:
-                    txt = json.dumps(json.load(f), indent=2, ensure_ascii=False)
+                    data = json.load(f)
             except Exception as exc:
-                txt = f"Could not read report: {exc}"
-            box.configure(state="normal")
-            box.delete("1.0", "end")
-            box.insert("1.0", txt)
-            box.configure(state="disabled")
+                ctk.CTkLabel(detail, text=f"Could not read report: {exc}",
+                             font=("Segoe UI", 12), text_color=RED, anchor="w",
+                             justify="left", wraplength=440).pack(fill="x", padx=16, pady=16)
+                return
+
+            # ---- header: mode + timestamp / age limit / duration -----------
+            header = ctk.CTkFrame(detail, fg_color="transparent")
+            header.pack(fill="x", padx=16, pady=(16, 10))
+            title_row = ctk.CTkFrame(header, fg_color="transparent")
+            title_row.pack(fill="x")
+            ctk.CTkLabel(title_row, text="Report", font=("Segoe UI", 13),
+                         text_color=MUTED).pack(side="left")
+            ctk.CTkLabel(title_row, text=data.get("mode", "?"),
+                         font=("Segoe UI Semibold", 14), text_color=ACCENT
+                         ).pack(side="left", padx=(6, 0))
+            meta = (f"{data.get('timestamp', '?')}  ·  age limit {data.get('age_days', 0)}d  ·  "
+                    f"duration {data.get('duration_sec', 0)}s")
+            ctk.CTkLabel(header, text=meta, font=("Segoe UI", 11), text_color=MUTED,
+                         anchor="w").pack(fill="x", pady=(2, 0))
+
+            # ---- table: one row per category, total row at the bottom ------
+            table = ctk.CTkFrame(detail, fg_color="transparent")
+            table.pack(fill="x", padx=16, pady=(0, 16))
+            for c, wgt in enumerate(COL_WEIGHTS):
+                table.grid_columnconfigure(c, weight=wgt)
+
+            def sep(row):
+                ctk.CTkFrame(table, height=1, fg_color=BORDER
+                             ).grid(row=row, column=0, columnspan=len(COLS),
+                                    sticky="ew", pady=6)
+
+            def row(r, values, *, header=False, bold=False):
+                color = MUTED if header else (ACCENT if bold else TEXT)
+                font = ("Segoe UI Semibold", 11 if header else 12)
+                for c, val in enumerate(values):
+                    ctk.CTkLabel(table, text=val, font=font, text_color=color,
+                                 anchor=("w" if c == 0 else "e")
+                                 ).grid(row=r, column=c, sticky="ew",
+                                        padx=(0 if c == 0 else 10, 0), pady=3)
+
+            r = 0
+            row(r, COLS, header=True)
+            r += 1
+            sep(r)
+            r += 1
+            for cat in data.get("categories", []):
+                row(r, (
+                    cat.get("label", "?"),
+                    str(cat.get("deleted", 0)),
+                    str(cat.get("skipped", 0)),
+                    str(cat.get("skipped_new", 0)),
+                    tc.fmt_size(cat.get("bytes_freed", 0)),
+                ))
+                r += 1
+            sep(r)
+            r += 1
+            t = data.get("totals", {})
+            row(r, (
+                "Total",
+                str(t.get("deleted", 0)),
+                str(t.get("skipped", 0)),
+                str(t.get("skipped_new", 0)),
+                tc.fmt_size(t.get("bytes_freed", 0)),
+            ), bold=True)
 
         files = sorted(glob.glob(os.path.join(tc.REPORTS_DIR, "*.json")), reverse=True)[:20]
         if not files:

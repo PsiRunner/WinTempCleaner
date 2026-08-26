@@ -138,3 +138,30 @@ follows [Keep a Changelog](https://keepachangelog.com/).
   `--json` automation flags** — straightforward in principle, but Task
   Scheduler registration isn't something that could be tested with
   confidence from here. Open to building these next if wanted.
+
+## [3.2.1] - 2026-08-26
+
+### Added
+
+**UI / branding**
+- Separate executable icons: `GUI.ico` for the GUI build, `CLI.ico` for the
+  CLI build — both replacing the previous shared `Icon.ico`.
+- Windows PE version-info metadata embedded in both executables via PyInstaller
+  `version` parameter: file version `3.2.0.0`, company name `Ψ-RцППЭR`,
+  product name `WinTempCleaner`, per-executable file descriptions.
+- User-friendly reports view in the GUI — cleanup reports are now rendered as
+  a structured table inside a `CTkScrollableFrame` with a header (mode,
+  timestamp, age limit, duration), per-category rows (Deleted / Locked / Too
+  new / Freed), and a bold totals row. Replaces the raw JSON textbox.
+
+### Changed
+- PyInstaller builds now use dedicated `.spec` files (`WindowsTempCleaner.spec`
+  and `WindowsTempCleanerGUI.spec`) instead of inline command-line flags.
+  The specs handle `--collect-all`, module exclusions, UAC manifest, per-exe
+  icons, and version-info metadata.
+- Distribution format changed from bare `.exe` to `.zip` archives for both
+  GUI and CLI releases.
+- README fully rewritten: professional formatting, six screenshots
+  (GUI Quick Clean, Deep Clean, Analyze Space, Reports; CLI Main Menu, Report),
+  updated build commands referencing `.spec` files, safety model table,
+  and auto-update design guarantees.

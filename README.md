@@ -1,19 +1,19 @@
 <p align="center">
-  <img src="Icon.ico" width="96" alt="WinTempCleaner logo">
+  <img src="GUI.ico" width="96" alt="WinTempCleaner logo">
 </p>
 
-<h1 align="center">🧹 WinTempCleaner</h1>
+<h1 align="center">WinTempCleaner</h1>
 
 <p align="center">
-  <strong>A portable Windows temp &amp; cache cleaner — with a minimalistic GUI,<br>a classic CLI, and a one-click self-updater.</strong>
+  <strong>A portable Windows temp &amp; cache cleaner — with a polished dark GUI,<br>an interactive CLI, and a built-in self-updater.</strong>
 </p>
 
 <p align="center">
   <a href="#-screenshots">Screenshots</a> ·
   <a href="#-cleaning-modes">Modes</a> ·
-  <a href="#️-safety-model">Safety</a> ·
-  <a href="#-quick-start">Quick start</a> ·
-  <a href="#-auto-update-gui">Auto-update</a> ·
+  <a href="#-safety-model">Safety</a> ·
+  <a href="#-quick-start">Quick Start</a> ·
+  <a href="#-auto-update">Auto-Update</a> ·
   <a href="#-building-from-source">Build</a>
 </p>
 
@@ -26,89 +26,121 @@
 
 ---
 
-## 📖 About
+## About
 
-WinTempCleaner sweeps temporary files, browser caches, GPU shader caches, app caches, developer caches and system logs — then shows exactly how much space was freed.
+WinTempCleaner sweeps temporary files, browser caches, GPU shader caches, application caches, developer caches, and system logs — then presents exactly how much space was reclaimed, either in the GUI's visual dashboard or the CLI's rich-formatted tables.
 
-- **One file, no install** — grab an `.exe` from [Releases](../../releases/latest), double-click, accept UAC, done.
-- **Two interfaces** — a minimalistic dark **GUI** and the classic interactive **CLI**, powered by the same engine.
-- **Self-updating** — the GUI compares against GitHub Releases on demand and installs new versions in place. Checks only happen when *you* click: no background polling, no notifications.
-- **Safety-first** — tiered cleaning modes, age limits, undoable deletions, locked-file tolerance, and a personal exclusion list that protects your paths before *every* deletion.
+**Zero installation** — download a single `.exe` from [Releases](../../releases/latest), accept the UAC prompt, and you're running. No setup wizard, no registry entries, no background services.
+
+**Two interfaces, one engine** — the same scanning and deletion core powers both a minimalistic dark **GUI** with one-click mode switching and a live preview, and a classic interactive **CLI** with rich-formatted menus and reports.
+
+**On-demand self-updater** — the GUI compares its version against GitHub Releases, shows release notes, and installs the replacement in place with a single click. Checks happen only when you trigger them: no background polling, no notifications.
+
+**Layered safety** — ten cleaning modes with clear safety tiers, an optional age limit, Recycle Bin undo support, a personal exclusion list checked before every deletion, and locked-file tolerance with zero Explorer popups.
+
+---
+
+## Screenshots
+
+### GUI — Quick Clean
+
+One-click temp and cache sweep with live stat cards, grouped size bars, and a scrollable operation log.
 
 <p align="center">
-  <img src="screenshots/main.png" width="820" alt="The WinTempCleaner dashboard: mode sidebar, stat cards, live log">
+  <img src="screenshots/GUI-QuickClean.png" width="820" alt="GUI Quick Clean view showing stat cards and operation log"/>
+</p>
+
+### GUI — Deep Clean
+
+The full safe sweep: every SAFE-tier location in a single pass.
+
+<p align="center">
+  <img src="screenshots/GUI-DeepClean.png" width="820" alt="GUI Deep Clean view showing expanded scope"/>
+</p>
+
+### GUI — Analyze Space
+
+A read-only threaded scan across 50+ locations with grouped size bars — nothing is deleted.
+
+<p align="center">
+  <img src="screenshots/GUI-AnalyzeSpace.png" width="820" alt="GUI Analyze Space view showing per-location size bars"/>
+</p>
+
+### GUI — Reports
+
+Past cleanup results rendered in a structured table with category breakdowns, locked/skipped counts, and freed space per group.
+
+<p align="center">
+  <img src="screenshots/GUI-Reports.png" width="820" alt="GUI Reports view showing a user-friendly table of cleanup results"/>
+</p>
+
+### CLI — Main Menu
+
+A rich-formatted interactive menu with safety indicators for every mode.
+
+<p align="center">
+  <img src="screenshots/CLI-MainMenu.png" width="640" alt="CLI main menu with mode descriptions and safety tags"/>
+</p>
+
+### CLI — Cleanup Report
+
+A rich-formatted post-cleanup report with per-category stats and totals.
+
+<p align="center">
+  <img src="screenshots/CLI-Report.png" width="640" alt="CLI cleanup report showing category-level deletion stats"/>
 </p>
 
 ---
 
-## 🖼️ Screenshots
-
-### Analyze Space
-
-A threaded scan across 50+ locations with grouped size bars — nothing is deleted.
-
-<p align="center">
-  <img src="screenshots/analyze.png" width="820" alt="Analyze Space view showing grouped size bars per location"/>
-</p>
-
-### Built-in updater
-
-Release notes, installer size and one-click update — straight from GitHub Releases.
-
-<p align="center">
-  <img src="screenshots/update.png" width="560" alt="Update available dialog showing version, notes and Download & Install button"/>
-</p>
-
----
-
-## 🧭 Cleaning modes
+## Cleaning Modes
 
 | Mode | Scope | Safety |
 |---|---|---|
-| **Quick Clean** | `%TEMP%`, `C:\Windows\Temp`, Prefetch, Chromium & Firefox caches, Recycle Bin | ✅ SAFE |
-| **Deep Clean** | Everything safe — Quick + Shaders & Tiles + Windows Files + App Caches + Dev Caches + Games & Launchers | ✅ SAFE |
-| **Shaders & Tiles** | DirectX / NVIDIA shader caches, thumbnail, icon & font caches, RDP bitmap cache | ✅ SAFE |
-| **Windows Files** | Windows Update cache, Panther/CBS logs, minidumps, system + per-user WER reports, CrashDumps, MEMORY.DMP, UWP temp data, CHKDSK `FOUND.*` folders | ✅ SAFE |
-| **App Caches** | Discord, Slack, Teams (classic + new), Spotify, VSCode, Cursor, Zoom logs — incl. DawnCache & Service Worker caches | ✅ SAFE |
-| **Dev Caches** | npm, pip, NuGet, Gradle, Go module downloads, Cargo registry | ✅ SAFE |
-| **Games & Launchers** | Steam client cache, crash dumps and web-view cache — no shader recompiles, unlike Extended's game shader sweep | ✅ SAFE |
-| **Extended Clean** | Game shader caches, LiveKernel / DISM / MoSetup debug logs, junk sweep (`*.tmp`, `~$*`, `*.bak`, `*-001.*`) | ⚠️ CAUTION |
-| **System Maintenance** | WinSxS component cleanup via the official DISM `StartComponentCleanup` (no `/ResetBase`) — manual-only, never bundled into Quick/Deep. Reported via free-disk-space delta | ⚠️ CAUTION |
-| **Analyze Space** | Scan-only report of every tracked location | 🔍 SCAN |
+| **Quick Clean** | `%TEMP%`, `C:\Windows\Temp`, Prefetch, Chromium & Firefox caches, Recycle Bin | SAFE |
+| **Deep Clean** | Everything in Quick + Shaders & Tiles + Windows Files + App Caches + Dev Caches + Games & Launchers | SAFE |
+| **Shaders & Tiles** | DirectX / NVIDIA shader caches, thumbnail, icon & font caches, RDP bitmap cache | SAFE |
+| **Windows Files** | Windows Update cache, Panther / CBS logs, minidumps, WER reports, CrashDumps, MEMORY.DMP, UWP temp, CHKDSK `FOUND.*` folders | SAFE |
+| **App Caches** | Discord, Slack, Teams, Spotify, VSCode, Cursor, Zoom — including DawnCache & Service Worker caches | SAFE |
+| **Dev Caches** | npm, pip, NuGet, Gradle, Go module downloads, Cargo registry | SAFE |
+| **Games & Launchers** | Steam client cache, crash dumps, web-view cache — no shader recompiles | SAFE |
+| **Extended Clean** | Game shader caches, LiveKernel / DISM / MoSetup debug logs, junk sweep (`*.tmp`, `~$*`, `*.bak`, `*-001.*`) | CAUTION |
+| **System Maintenance** | WinSxS component cleanup via official DISM `StartComponentCleanup` (no `/ResetBase`) — reported via free-disk-space delta | CAUTION |
+| **Analyze Space** | Scan-only report of every tracked location — no files are modified | SCAN |
 
-The GUI also has two standalone tools in the sidebar:
+### Sidebar Tools
 
-- **Installers** — lists `.exe`/`.msi` files in your Downloads folder older than 30 days, sorted by size (read-only report; each row gets its own confirm-to-delete button).
-- **Exclude** — manage protected paths. Exclusions are checked before every single deletion, in every mode, regardless of age limit or Recycle Bin setting.
+- **Installers** — lists `.exe` / `.msi` files in your Downloads folder older than 30 days, sorted by size. Each row has an individual confirm-to-delete button; nothing is removed automatically.
+- **Exclude** — manage your personal protected path list. Exclusions are checked before every single deletion, in every mode, regardless of age limit or Recycle Bin setting. Excluded folders are pruned from directory walks entirely.
 
 ---
 
-## 🛡️ Safety model
+## Safety Model
 
 Cleaning is split into two tiers:
 
-- **SAFE** — always cleanable: temp dirs, browser/app/dev caches, icon & font caches, shader & thumbnail caches, system logs & dumps.
-- **CAUTION** — reachable only through **Extended Clean** and **System Maintenance**, and only after an explicit confirmation. Game shader caches recompile on next launch; debug logs are lost forever. System Maintenance runs the official DISM operation (no manual file deletion) and warns it can take a while.
+- **SAFE** — always cleanable: temp directories, browser / app / dev caches, icon & font caches, shader & thumbnail caches, system logs and crash dumps. These are regenerated by their respective applications and operating system on demand.
+- **CAUTION** — reachable only through **Extended Clean** and **System Maintenance**, and only after an explicit confirmation. Game shader caches will recompile on the next launch. Debug logs are lost permanently. System Maintenance runs the official DISM operation (no manual file deletion) and warns that it may take several minutes.
 
-On top of that, three protective layers apply to everything:
+Three protective layers apply universally:
 
 | Layer | Default | What it does |
 |---|---|---|
-| **Age limit** | `Off` | Only items older than N days (1 / 3 / 7 / 30) are deleted — in-use and session files are never touched. Off by default; set a limit for extra caution. |
-| **Recycle Bin mode** | `Off` | Deletions go to the Recycle Bin instead of being permanent (undoable). Quick/Deep then skip emptying the bin so you can recover items. |
-| **Exclusions** | empty | Your personal protected paths — checked before *every* deletion, in every mode, regardless of age limit or Recycle Bin setting. Excluded folders are pruned from directory walks entirely, not just skipped file-by-file. |
+| **Age limit** | Off | Only items older than N days (1 / 3 / 7 / 30) are deleted. In-use and session files are never touched. Off by default; enable for extra caution. |
+| **Recycle Bin** | Off | Deletions go to the Recycle Bin instead of being permanent. Quick / Deep then skip emptying the bin so you can recover items. |
+| **Exclusions** | Empty | Personal protected paths — checked before every deletion, in every mode, regardless of all other settings. Excluded folders are pruned from directory walks entirely, not just skipped file-by-file. |
 
-Locked files (held by running apps) are skipped and counted — no Explorer popups, no crashes. Read-only files (like Go's module cache) have their attribute cleared and the delete retried instead of silently failing.
+Locked files (held by running applications) are skipped gracefully and counted in the report — no Explorer popups, no crashes. Read-only files (like Go's module cache) have their attribute cleared and the delete retried instead of silently failing.
 
 ---
 
-## 🚀 Quick start
+## Quick Start
 
-1. Head to **[Releases](../../releases/latest)** and download:
-   - `WindowsTempCleanerGUI-V*.exe` — the **GUI** (recommended)
-   - `WindowsTempCleaner-V*.exe` — the **CLI**
-2. Double-click the file and accept the UAC prompt (administrator rights let it reach system locations).
-3. In the GUI pick a mode → press **Start**. In the CLI type a menu number.
+1. Go to **[Releases](../../releases/latest)** and download:
+   - `WindowsTempCleanerGUI.zip` — the **GUI** (recommended)
+   - `WindowsTempCleaner.zip` — the **CLI**
+2. Extract the `.exe` from the archive.
+3. Double-click it and accept the UAC prompt (administrator rights are required to reach system locations).
+4. In the GUI, pick a mode from the sidebar and press **Start**. In the CLI, type a menu number.
 
 <details>
 <summary><strong>CLI menu</strong></summary>
@@ -137,87 +169,77 @@ Locked files (held by running apps) are skipped and counted — no Explorer popu
 
 </details>
 
-### From source
+### From Source
 
 ```batch
-pip install customtkinter rich
+pip install customtkinter rich ctkfontawesome pillow
 python temp_cleaner_gui.py
 ```
 
 ---
 
-## 🔄 Auto-update (GUI)
+## Auto-Update
 
-Press **Check for Updates** in the sidebar:
+Press **Check for Updates** in the GUI sidebar:
 
-1. The app queries the latest GitHub Release and compares versions.
-2. If there's something new you get the release notes and a **Download & Install** button.
-3. The new executable replaces the running one in place and the app relaunches.
+1. The app queries the latest GitHub Release and compares version strings.
+2. If a newer version exists, you see the release notes, asset size, and a **Download & Install** button.
+3. The replacement executable is downloaded, verified, and swapped in place. The app relaunches automatically.
 
 Design guarantees:
 
-- **On demand only** — checks never run in the background; no timers, no toasts.
-- **Extended timeouts + retries** — downloads survive slow or flaky connections (300 s socket timeout, 3 attempts).
-- **Safe swap** — the running exe is renamed `.old` before the replacement moves in; failed installs roll back automatically.
-- **Source installs** — if you run from source, the button simply opens the releases page.
+| Property | Behaviour |
+|---|---|
+| **On demand only** | No background timers, no push notifications, no telemetry. |
+| **Resilient downloads** | 300 s socket timeout, 3 automatic retries. |
+| **Safe swap** | The running `.exe` is renamed to `.old` before the new file moves in. A failed install rolls back automatically. |
+| **Source fallback** | Running from source? The button opens the Releases page in your browser instead. |
 
 ---
 
-## 📦 Requirements
+## Requirements
 
 | | |
 |---|---|
 | OS | Windows 10 / 11 (x64) |
 | Permissions | Administrator (auto-prompted via UAC) |
-| Source only | Python 3.10+, [`customtkinter`](https://github.com/TomSchimansky/CustomTkinter), [`rich`](https://github.com/Textualize/rich), [`ctkfontawesome`](https://pypi.org/project/ctkfontawesome/) + [`pillow`](https://python-pillow.org) (icons) |
+| Source only | Python 3.10+, [`customtkinter`](https://github.com/TomSchimansky/CustomTkinter), [`rich`](https://github.com/Textualize/rich), [`ctkfontawesome`](https://pypi.org/project/ctkfontawesome/) + [`pillow`](https://python-pillow.org) |
 
 ---
 
-## 🔨 Building from source
+## Building from Source
 
 CLI:
 
 ```batch
 pip install pyinstaller rich
-pyinstaller --onefile --console --uac-admin --icon "Icon.ico" ^
-    --name "WindowsTempCleaner" ^
-    temp_cleaner.py
+pyinstaller WindowsTempCleaner.spec
 ```
 
 GUI:
 
 ```batch
 pip install pyinstaller customtkinter rich ctkfontawesome pillow
-pyinstaller --onefile --noconsole --uac-admin --icon "Icon.ico" ^
-    --collect-all customtkinter ^
-    --collect-all ctkfontawesome ^
-    --exclude-module PyQt5 --exclude-module PyQt6 ^
-    --exclude-module PySide2 --exclude-module PySide6 ^
-    --exclude-module numpy --exclude-module pandas --exclude-module scipy ^
-    --exclude-module matplotlib ^
-    --exclude-module IPython --exclude-module jedi --exclude-module parso ^
-    --exclude-module jupyter --exclude-module notebook ^
-    --exclude-module pythonnet --exclude-module clr ^
-    --name "WindowsTempCleanerGUI" ^
-    temp_cleaner_gui.py
+pyinstaller WindowsTempCleanerGUI.spec
 ```
 
-> The `--collect-all` flags pull in CustomTkinter's themes and ctkfontawesome's
-> fonts/SVG assets — without them the GUI builds but crashes on launch.
-> The `--exclude-module` flags stop PyInstaller from bundling unrelated packages
-> installed in your global Python environment. Note that **PIL (Pillow) must NOT
-> be excluded** — the icon renderer needs it at runtime.
+> The spec files handle `--collect-all` for CustomTkinter and ctkfontawesome,
+> module exclusions, UAC admin manifest, per-executable icons, and Windows
+> version-info metadata. Build from the repo root so PyInstaller resolves
+> the `.spec` files and icon assets correctly.
 
 ---
 
-## 🗂️ Files created at runtime
+## Runtime Files
 
 | Path | Purpose |
 |---|---|
-| `cleaner_config.ini` | Persisted options — age limit, Recycle Bin mode, auto-reports, protected paths |
-| `Reports/*.csv|.json` | Per-run cleanup reports (viewable inside both apps) |
-| `cleaner_error.log` | Written only when the CLI crashes unexpectedly |
+| `cleaner_config.ini` | Persisted settings — age limit, Recycle Bin mode, auto-reports, protected paths |
+| `Reports/*.csv` | Per-run cleanup reports (viewable in both apps; the GUI renders them as a structured table) |
+| `cleaner_error.log` | Written only when the CLI encounters an unexpected crash |
 
-## 📄 License
+---
 
-[MIT](LICENSE) — free to use, modify and ship.
+## License
+
+[MIT](LICENSE) — free to use, modify, and distribute.

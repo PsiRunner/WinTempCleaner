@@ -36,5 +36,6 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     uac_admin=True,
-    icon=['D:\\Projects\\WinTempCleaner\\Icon.ico'],
+    icon=['D:\\Projects\\WinTempCleaner\\CLI.ico'],
+    version='D:\\Projects\\WinTempCleaner\\version_cli.txt',
 )
