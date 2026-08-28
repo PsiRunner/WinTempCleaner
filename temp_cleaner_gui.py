@@ -13,6 +13,8 @@ import glob
 import json
 import time
 import ctypes
+import shutil
+import zipfile
 import threading
 import collections
 import subprocess
@@ -97,15 +99,15 @@ def fetch_latest_release(timeout=API_TIMEOUT):
             {"name": a.get("name", ""), "url": a.get("browser_download_url", ""),
              "size": a.get("size", 0)}
             for a in data.get("assets") or []
-            if str(a.get("name", "")).lower().endswith(".exe")
+            if str(a.get("name", "")).lower().endswith((".zip"))
         ],
     }
 
 
 def pick_installer_asset(assets):
-    exes = [a for a in assets if str(a.get("name", "")).lower().endswith(".exe")]
-    pref = [a for a in exes if "gui" in a["name"].lower()]
-    pool = pref or exes
+    zips = [a for a in assets if str(a.get("name", "")).lower().endswith(".zip")]
+    pref = [a for a in zips if "gui" in str(a.get("name", "")).lower()]
+    pool = pref or zips
     return pool[0] if pool else None
 
 
@@ -865,7 +867,8 @@ class App(ctk.CTk):
 
     def _cleanup_stale_installers(self):
         if getattr(sys, "frozen", False):
-            for p in (sys.executable + ".old", sys.executable + ".update"):
+            for p in (sys.executable + ".old", sys.executable + ".update",
+                      sys.executable + ".update.zip"):
                 try:
                     if os.path.exists(p):
                         os.remove(p)
@@ -905,7 +908,7 @@ class App(ctk.CTk):
         if self._show_update_dialog(rel, asset) != "install":
             return
         if not asset:
-            self._log_line("No installer attached to the release — opening the page.")
+            self._log_line("No package attached to the release — opening the page.")
             try:
                 os.startfile(rel["page"])
             except Exception:
@@ -937,7 +940,7 @@ class App(ctk.CTk):
                      font=("Segoe UI Semibold", 17), text_color=TEXT).pack(side="left")
         ctk.CTkLabel(head, text=f"you have v{VERSION}", font=("Segoe UI", 11),
                      text_color=MUTED).pack(side="right", pady=(6, 0))
-        size = f"  ·  {asset['size'] / 1024 ** 2:.1f} MB installer" if asset else ""
+        size = f"  ·  {asset['size'] / 1024 ** 2:.1f} MB download" if asset else ""
         ctk.CTkLabel(dlg, text=(rel.get("title") or "New version") + size,
                      font=("Segoe UI", 11), text_color=MUTED,
                      anchor="w").pack(fill="x", padx=26)
@@ -989,7 +992,8 @@ class App(ctk.CTk):
         for b in self._btns.values():
             b.configure(state="disabled")
         exe = sys.executable
-        tmp = exe + ".update"
+        tmp_zip = exe + ".update.zip"
+        tmp_exe = exe + ".update"
 
         def prog(done, total):
             frac = min(1.0, done / float(total)) if total else 0.0
@@ -998,11 +1002,23 @@ class App(ctk.CTk):
         def work():
             ok, msg = True, ""
             try:
-                _, secs = download_to_file(asset["url"], tmp, progress=prog)
+                _, secs = download_to_file(asset["url"], tmp_zip, progress=prog)
                 self.after(0, lambda s=secs: self._bar.set(1.0))
                 self._log_line_safe(f"Downloaded {asset['name']} in {s:.1f}s — installing…")
             except Exception as exc:
                 ok, msg = False, f"download failed ({exc})"
+            if ok:
+                try:
+                    with zipfile.ZipFile(tmp_zip) as zf:
+                        members = [m for m in zf.namelist()
+                                   if m.lower().endswith(".exe")]
+                        if not members:
+                            raise ValueError("no executable found inside the archive")
+                        member = members[0]
+                        with zf.open(member) as src, open(tmp_exe, "wb") as dst:
+                            shutil.copyfileobj(src, dst)
+                except Exception as exc:
+                    ok, msg = False, f"extract failed ({exc})"
             if ok:
                 try:
                     old = exe + ".old"
@@ -1010,7 +1026,7 @@ class App(ctk.CTk):
                         os.remove(old)
                     os.rename(exe, old)
                     try:
-                        os.replace(tmp, exe)
+                        os.replace(tmp_exe, exe)
                     except OSError:
                         os.rename(old, exe)
                         raise
@@ -1020,10 +1036,11 @@ class App(ctk.CTk):
                 except Exception as exc:
                     ok, msg = False, str(exc) or type(exc).__name__
             if not ok:
-                try:
-                    os.remove(tmp)
-                except OSError:
-                    pass
+                for p in (tmp_zip, tmp_exe):
+                    try:
+                        os.remove(p)
+                    except OSError:
+                        pass
             self.after(0, lambda: self._update_finished(ok, msg, asset))
 
         threading.Thread(target=work, daemon=True).start()
